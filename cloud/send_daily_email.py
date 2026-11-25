@@ -105,11 +105,11 @@ def main() -> None:
     with open(MODELS_CONFIG_PATH, "r", encoding="utf-8") as f:
         models_cfg = json.load(f)
 
-    smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(os.environ.get("SMTP_PORT", "465"))
-    smtp_user = os.environ.get("SMTP_USER", "")
-    smtp_pass = os.environ.get("SMTP_PASSWORD", "")
-    recipient = os.environ.get("EMAIL_TO") or models_cfg["email"]["recipient"]
+    smtp_host = (os.environ.get("SMTP_HOST") or "").strip() or "smtp.gmail.com"
+    smtp_port = int((os.environ.get("SMTP_PORT") or "").strip() or "465")
+    smtp_user = (os.environ.get("SMTP_USER") or "").strip()
+    smtp_pass = (os.environ.get("SMTP_PASSWORD") or "").strip()
+    recipient = (os.environ.get("EMAIL_TO") or "").strip() or models_cfg["email"]["recipient"]
 
     if not smtp_user or not smtp_pass:
         raise SystemExit("ERROR: SMTP_USER and SMTP_PASSWORD environment variables must be set.")
