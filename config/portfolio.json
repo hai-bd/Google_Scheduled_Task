@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-11-25 17:29",
+  "updated_at": "2026-11-25 23:00",
   "currency": "CNY",
   "benchmark": "国内人民币黄金（上海金 AU9999 / 银行积存金 / 黄金 ETF 综合参考）",
   "monthly_disposable_budget_cny": 3000,
@@ -13,11 +13,11 @@
     "remaining_cny": 1800
   },
   "position": {
-    "principal_cny": 9501.02,
+    "principal_cny": 8392.78,
     "average_cost_cny_per_gram": 840.31,
-    "estimated_grams": 11.3066,
-    "last_known_market_value_cny": 8547.45,
-    "last_known_cumulative_pnl_cny": -953.57
+    "estimated_grams": 9.9877,
+    "last_known_cumulative_pnl_cny": -953.57,
+    "privacy_note": "个人真实持仓与均价仅用于本地内部测算，严禁出现在对外发送的 HTML 邮件中。"
   },
   "preferences": {
     "horizons": [
@@ -38,12 +38,9 @@
       "date": "2026-11-25",
       "action": "BUY",
       "amount_cny": 1200,
-      "implied_price_cny_per_gram": 755.97,
-      "estimated_added_grams": 1.5874,
-      "post_trade_market_value_cny": 8547.45,
+      "post_trade_holding_cny": 8392.78,
       "post_trade_avg_cost_cny_per_gram": 840.31,
-      "post_trade_cumulative_pnl_cny": -953.57,
-      "note": "按单笔最低买入门槛加仓 1,200 RMB，均价由 ~850 降至 840.31 RMB/克；同步校准账户真实总本金为 9,501.02 RMB（市值 8,547.45 + 累计浮亏 953.57）。"
+      "note": "加仓 1,200 RMB 后持仓校准为 8,392.78 RMB，均价维持 840.31 RMB/克。"
     }
   ]
 }

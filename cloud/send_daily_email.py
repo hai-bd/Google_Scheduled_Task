@@ -35,6 +35,22 @@ LATEST_DISPATCH_PATH = REPO_ROOT / "records" / "latest_dispatch.json"
 COMPUTE_SCRIPT = REPO_ROOT / "cloud" / "gold_daily_compute.py"
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+DOTENV_PATH = REPO_ROOT / ".env"
+
+
+def load_local_dotenv() -> None:
+    """Load simple KEY=VALUE lines from local .env if present (never overrides existing env)."""
+    if not DOTENV_PATH.exists():
+        return
+    for raw_line in DOTENV_PATH.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
+        if k and k not in os.environ:
+            os.environ[k] = v
 
 
 def wait_until_target_time(target_hhmm: str, max_wait_minutes: int = 30) -> None:
@@ -57,20 +73,26 @@ def wait_until_target_time(target_hhmm: str, max_wait_minutes: int = 30) -> None
         print(f"[INFO] Current CST={now.strftime('%H:%M:%S')} already past {target_hhmm}; sending now.")
 
 
+def parse_recipients(raw: str | list[str]) -> list[str]:
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    return [x.strip() for x in str(raw).replace(";", ",").split(",") if x.strip()]
+
+
 def send_smtp_email(
     *,
     smtp_host: str,
     smtp_port: int,
     smtp_user: str,
     smtp_pass: str,
-    recipient: str,
+    recipients: list[str],
     subject: str,
     text_body: str,
     html_body: str,
 ) -> None:
     msg = MIMEMultipart("alternative")
     msg["From"] = formataddr((str(Header("黄金投资多Agent投委会", "utf-8")), smtp_user))
-    msg["To"] = recipient
+    msg["To"] = ", ".join(recipients)
     msg["Subject"] = Header(subject, "utf-8")
 
     msg.attach(MIMEText(text_body, "plain", "utf-8"))
@@ -79,13 +101,13 @@ def send_smtp_email(
     if smtp_port == 465:
         with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30) as server:
             server.login(smtp_user, smtp_pass)
-            server.sendmail(smtp_user, [recipient], msg.as_string())
+            server.sendmail(smtp_user, recipients, msg.as_string())
     else:
         with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
             server.ehlo()
             server.starttls()
             server.login(smtp_user, smtp_pass)
-            server.sendmail(smtp_user, [recipient], msg.as_string())
+            server.sendmail(smtp_user, recipients, msg.as_string())
 
 
 def main() -> None:
@@ -93,12 +115,14 @@ def main() -> None:
     parser.add_argument("--wait-until", type=str, default=None, help="Target CST HH:MM (e.g. 08:00)")
     parser.add_argument("--no-wait", action="store_true", help="Send immediately without waiting")
     parser.add_argument("--force-resend", action="store_true", help="Send even if already marked sent")
+    parser.add_argument("--to", type=str, default=None, help="Override recipient(s), comma-separated")
     parser.add_argument(
         "--fallback-compute",
         action="store_true",
         help="If today's report is missing, run gold_daily_compute.py automatically",
     )
     args = parser.parse_args()
+    load_local_dotenv()
 
     today_str = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d")
 
@@ -109,7 +133,13 @@ def main() -> None:
     smtp_port = int((os.environ.get("SMTP_PORT") or "").strip() or "465")
     smtp_user = (os.environ.get("SMTP_USER") or "").strip()
     smtp_pass = (os.environ.get("SMTP_PASSWORD") or "").strip()
-    recipient = (os.environ.get("EMAIL_TO") or "").strip() or models_cfg["email"]["recipient"]
+    raw_recipients = (
+        args.to
+        or (os.environ.get("EMAIL_TO") or "").strip()
+        or models_cfg["email"].get("recipients")
+        or models_cfg["email"]["recipient"]
+    )
+    recipients = parse_recipients(raw_recipients)
 
     if not smtp_user or not smtp_pass:
         raise SystemExit("ERROR: SMTP_USER and SMTP_PASSWORD environment variables must be set.")
@@ -132,7 +162,7 @@ def main() -> None:
                     smtp_port=smtp_port,
                     smtp_user=smtp_user,
                     smtp_pass=smtp_pass,
-                    recipient=recipient,
+                    recipients=recipients,
                     subject=f"【告警】黄金投委会 {today_str} 自动计算失败",
                     text_body=f"今日（{today_str}）06:00 定时计算及兜底重跑均失败，请登录 GitHub Actions 查看运行日志。",
                     html_body=(
@@ -154,25 +184,32 @@ def main() -> None:
     if args.wait_until and not args.no_wait:
         wait_until_target_time(args.wait_until)
 
-    html_body = (REPO_ROOT / dispatch["html_path"]).read_text(encoding="utf-8")
-    text_body = (REPO_ROOT / dispatch["text_path"]).read_text(encoding="utf-8")
+    html_p = Path(dispatch["html_path"])
+    text_p = Path(dispatch["text_path"])
+    if not html_p.is_absolute():
+        html_p = REPO_ROOT / html_p
+    if not text_p.is_absolute():
+        text_p = REPO_ROOT / text_p
+    html_body = html_p.read_text(encoding="utf-8")
+    text_body = text_p.read_text(encoding="utf-8")
 
     send_smtp_email(
         smtp_host=smtp_host,
         smtp_port=smtp_port,
         smtp_user=smtp_user,
         smtp_pass=smtp_pass,
-        recipient=recipient,
+        recipients=recipients,
         subject=dispatch["subject"],
         text_body=text_body,
         html_body=html_body,
     )
 
-    dispatch["sent"] = True
-    dispatch["sent_at_cst"] = datetime.now(SHANGHAI_TZ).isoformat()
-    dispatch["recipient"] = recipient
-    LATEST_DISPATCH_PATH.write_text(json.dumps(dispatch, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[INFO] Email sent successfully to {recipient} at {dispatch['sent_at_cst']}!")
+    if not args.to:
+        dispatch["sent"] = True
+        dispatch["sent_at_cst"] = datetime.now(SHANGHAI_TZ).isoformat()
+        dispatch["recipients"] = recipients
+        LATEST_DISPATCH_PATH.write_text(json.dumps(dispatch, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[INFO] Email sent successfully to {', '.join(recipients)} at {datetime.now(SHANGHAI_TZ).isoformat()}!")
 
 
 if __name__ == "__main__":

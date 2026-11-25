@@ -685,9 +685,9 @@ def render_email_html(
           <div style="font-size:11px;color:#64748b;margin-top:2px;">国际：{esc(xau_usd[:40])}</div>
         </div>
         <div style="flex:1;min-width:160px;">
-          <div style="font-size:12px;color:#64748b;">当前持仓（本金 {portfolio_metrics['principal_cny']} / 均价 {portfolio_metrics['average_cost_cny_per_gram']}）</div>
-          <div style="font-size:18px;font-weight:700;color:{pnl_color};margin-top:2px;">{esc(pnl_text)}</div>
-          <div style="font-size:11px;color:#64748b;margin-top:2px;">月度预算：{portfolio_metrics['monthly_budget_cny']} RMB</div>
+          <div style="font-size:12px;color:#64748b;">参考月度定投预算模型</div>
+          <div style="font-size:20px;font-weight:700;color:#0f172a;margin-top:2px;">{int(portfolio_metrics['monthly_budget_cny'])} <span style="font-size:12px;font-weight:400;">RMB/月</span></div>
+          <div style="font-size:11px;color:#64748b;margin-top:2px;">单笔起投门槛：{int(portfolio_metrics['min_single_buy_cny'])} RMB</div>
         </div>
       </div>
 
