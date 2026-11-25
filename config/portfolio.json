@@ -1,0 +1,25 @@
+{
+  "updated_at": "2026-11-25",
+  "currency": "CNY",
+  "benchmark": "国内人民币黄金（上海金 AU9999 / 银行积存金 / 黄金 ETF 综合参考）",
+  "monthly_disposable_budget_cny": 3000,
+  "position": {
+    "principal_cny": 7500,
+    "average_cost_cny_per_gram": 850,
+    "estimated_grams": 8.8235
+  },
+  "preferences": {
+    "horizons": [
+      "short_term_swing",
+      "long_term_allocation"
+    ],
+    "allowed_actions": [
+      "BUY_FULL",
+      "BUY_PARTIAL",
+      "HOLD",
+      "TAKE_PROFIT_PARTIAL",
+      "REDUCE_HEAVY"
+    ],
+    "strategy_note": "同时接受短线波段与长线配置；决议覆盖全额买入、分批买入、观望、部分止盈减仓、大幅减仓防守。"
+  }
+}

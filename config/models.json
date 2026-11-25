@@ -1,0 +1,42 @@
+{
+  "updated_at": "2026-11-25",
+  "default_thinking_level": "high",
+  "models": {
+    "collectors": {
+      "market": "gemini-4-hydrogen",
+      "macro": "gemini-4-hydrogen",
+      "geo": "gemini-4-hydrogen"
+    },
+    "sentinel": "gemini-4-hydrogen",
+    "analysts": {
+      "policy": "gemini-4-neon",
+      "trend": "gemini-4-neon",
+      "portfolio": "gemini-4-hydrogen"
+    },
+    "committee": {
+      "trend_swing": "gemini-4-neon",
+      "long_term": "gemini-4-argon",
+      "risk_redteam": "gemini-4-carbon",
+      "portfolio_cfo": "gemini-4-argon"
+    },
+    "secretary": "gemini-4-hydrogen"
+  },
+  "execution_policy": {
+    "mode": "smart_two_tier",
+    "note": "smart_two_tier = 日常盘前轻量盯盘，满足异动阈值/触价/固定周期日自动升级为4委员两轮完整投委会；改为 always_full 则每日均开完整投委会。",
+    "full_committee_weekdays": [1],
+    "full_committee_monthdays": [1, 15],
+    "price_move_trigger_pct": 1.5,
+    "watch_price_levels_cny_g": {
+      "dip_buy_low": 745.0,
+      "deep_dip": 730.0,
+      "short_take_profit": 800.0,
+      "long_take_profit": 920.0
+    }
+  },
+  "email": {
+    "recipient": "3518109978@qq.com",
+    "target_send_time_cst": "08:00",
+    "timezone": "Asia/Shanghai"
+  }
+}
