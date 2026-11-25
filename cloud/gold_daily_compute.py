@@ -389,18 +389,33 @@ def call_gemini_json(
 # ------------------------------------------------------------------------------
 
 
-def compute_portfolio_metrics(portfolio: dict[str, Any], current_price_cny: float | None) -> dict[str, Any]:
+def compute_portfolio_metrics(
+    portfolio: dict[str, Any], current_price_cny: float | None, today_str: str = ""
+) -> dict[str, Any]:
     pos = portfolio["position"]
     principal = float(pos["principal_cny"])
     avg_cost = float(pos["average_cost_cny_per_gram"])
     grams = principal / avg_cost
     budget = float(portfolio["monthly_disposable_budget_cny"])
+    min_buy = float(portfolio.get("constraints", {}).get("min_single_buy_cny", 1200))
+
+    tracker = portfolio.get("monthly_budget_tracker", {})
+    current_ym = today_str[:7] if len(today_str) >= 7 else ""
+    if current_ym and tracker.get("month") == current_ym:
+        spent_month = float(tracker.get("spent_cny", 0))
+        remaining_month = max(0.0, float(tracker.get("remaining_cny", budget - spent_month)))
+    else:
+        spent_month = 0.0
+        remaining_month = budget
 
     metrics: dict[str, Any] = {
         "principal_cny": round(principal, 2),
         "average_cost_cny_per_gram": round(avg_cost, 2),
         "estimated_grams": round(grams, 4),
         "monthly_budget_cny": round(budget, 2),
+        "spent_this_month_cny": round(spent_month, 2),
+        "remaining_budget_this_month_cny": round(remaining_month, 2),
+        "min_single_buy_cny": round(min_buy, 2),
         "current_price_cny_per_gram": current_price_cny,
     }
 
@@ -417,7 +432,16 @@ def compute_portfolio_metrics(portfolio: dict[str, Any], current_price_cny: floa
                 "trim_scenarios": {},
             }
         )
-        for add_amt in (1000, 1500, 2000, 3000):
+        candidate_adds = sorted(
+            {
+                int(min_buy),
+                int(remaining_month) if remaining_month >= min_buy else int(min_buy),
+                int(budget),
+            }
+        )
+        for add_amt in candidate_adds:
+            if add_amt < min_buy:
+                continue
             added_g = add_amt / current_price_cny
             new_principal = principal + add_amt
             new_grams = grams + added_g
@@ -787,7 +811,7 @@ def main() -> None:
 
     cny_price = intel["market"].get("cny_gold_price_per_gram")
     overnight_chg = intel["market"].get("overnight_change_pct")
-    portfolio_metrics = compute_portfolio_metrics(portfolio, cny_price)
+    portfolio_metrics = compute_portfolio_metrics(portfolio, cny_price, today_str)
     print(
         f"[INFO] Phase 1 done | XAU/USD={intel['market']['xau_usd_price']} | "
         f"CNY={cny_price} RMB/g | overnight={overnight_chg}% | sentiment={intel['geo']['market_sentiment_label']}"
@@ -984,7 +1008,7 @@ def main() -> None:
                 models["analysts"]["portfolio"],
                 PORTFOLIO_ANALYSIS_SCHEMA,
                 f"""你是【个人持仓与仓位管理分析师】。今天是 {today_str}。
-基于用户真实账户配置、已算好的定量指标和最新行情，评估持仓健康度、对比加仓 1000/1500/2000/3000 元与减仓 20%/30%/50% 方案，提出适合月预算 3000 元的风控护栏及中文正文。
+基于用户真实账户配置、已算好的定量指标和最新行情，评估持仓健康度、对比可执行加仓方案（严格遵守单笔最低买入金额 min_single_buy_cny 与本月剩余预算 remaining_budget_this_month_cny）与减仓 20%/30%/50% 方案，提出风控护栏及中文正文。
 【账户配置】
 {portfolio_json}
 【定量测算】
@@ -1108,7 +1132,8 @@ def main() -> None:
                 "model": models["committee"]["portfolio_cfo"],
                 "system": (
                     "你是黄金投委会【委员D · 个人财务与仓位官】。只忠于用户的真实财务约束"
-                    "（当前持仓本金/均价、月预算 3000 元、兼容短长线与止盈减仓），重点权衡均价摊薄效率、现金留存弹性与利润锁定。"
+                    "（当前持仓本金/均价、月预算 3000 元及本月剩余预算、单笔最低买入门槛 1200 元、兼容短长线与止盈减仓），"
+                    "严禁给出低于单笔最低门槛或超出本月剩余预算的买入金额，重点权衡均价摊薄效率、现金留存弹性与利润锁定。"
                 ),
             },
         ]

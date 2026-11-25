@@ -1,12 +1,23 @@
 {
-  "updated_at": "2026-11-25",
+  "updated_at": "2026-11-25 17:29",
   "currency": "CNY",
   "benchmark": "国内人民币黄金（上海金 AU9999 / 银行积存金 / 黄金 ETF 综合参考）",
   "monthly_disposable_budget_cny": 3000,
+  "constraints": {
+    "min_single_buy_cny": 1200,
+    "note": "交易平台单笔最低买入金额为 1,200 RMB，所有分批买入建议必须 ≥ 1,200 RMB 或按 0 元观望。"
+  },
+  "monthly_budget_tracker": {
+    "month": "2026-11",
+    "spent_cny": 1200,
+    "remaining_cny": 1800
+  },
   "position": {
-    "principal_cny": 7500,
-    "average_cost_cny_per_gram": 850,
-    "estimated_grams": 8.8235
+    "principal_cny": 9501.02,
+    "average_cost_cny_per_gram": 840.31,
+    "estimated_grams": 11.3066,
+    "last_known_market_value_cny": 8547.45,
+    "last_known_cumulative_pnl_cny": -953.57
   },
   "preferences": {
     "horizons": [
@@ -20,6 +31,19 @@
       "TAKE_PROFIT_PARTIAL",
       "REDUCE_HEAVY"
     ],
-    "strategy_note": "同时接受短线波段与长线配置；决议覆盖全额买入、分批买入、观望、部分止盈减仓、大幅减仓防守。"
-  }
+    "strategy_note": "同时接受短线波段与长线配置；决议覆盖全额买入、分批买入、观望、部分止盈减仓、大幅减仓防守；单笔买入不得低于 1,200 RMB。"
+  },
+  "trade_history": [
+    {
+      "date": "2026-11-25",
+      "action": "BUY",
+      "amount_cny": 1200,
+      "implied_price_cny_per_gram": 755.97,
+      "estimated_added_grams": 1.5874,
+      "post_trade_market_value_cny": 8547.45,
+      "post_trade_avg_cost_cny_per_gram": 840.31,
+      "post_trade_cumulative_pnl_cny": -953.57,
+      "note": "按单笔最低买入门槛加仓 1,200 RMB，均价由 ~850 降至 840.31 RMB/克；同步校准账户真实总本金为 9,501.02 RMB（市值 8,547.45 + 累计浮亏 953.57）。"
+    }
+  ]
 }

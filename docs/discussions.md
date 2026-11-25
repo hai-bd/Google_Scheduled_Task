@@ -83,3 +83,18 @@
   - [x] `config/models.json` 新增 `"default_thinking_level": "high"`。
   - [x] `cloud/gold_daily_compute.py` 所有 Agent 调用显式透传 `generation_config={"thinking_level": thinking_level}`（覆盖 `gemini-4-carbon` 与 `gemini-4-argon` 默认的 `medium`，全员开启 `high` 深度思考）。
   - [x] `docs/cloud-deployment-guide.md` 补充 `hai-bd/Google_Scheduled_Task` 专属直达链接、秘钥获取图文级指引及 Actions 手动测试步骤。
+
+---
+
+## [2026-11-25 17:29] Discussion #007 — 实盘加仓 1,200 RMB 同步与账户口径精确校准
+
+- **用户实盘反馈**：
+  - 刚买入 **1,200 RMB**（平台单笔最低买入门槛）。
+  - 成交后账户当前持仓市值：**8,547.45 RMB**，最新持仓均价：**840.31 RMB/克**，累计收益：**-953.57 RMB**。
+- **精确对账结果**：
+  - 账户真实累计本金 = `8,547.45 + 953.57` = **9,501.02 RMB**（此前口头估算的 7,500 接近加仓前市值 7,347.45，本次已按平台实盘数据精确对齐）。
+  - 当前真实持仓克数 = `9,501.02 / 840.31` ≈ **11.3066 克**（反推当前平台实时金价 ≈ **755.97 RMB/克**，与今日投委会采集的上海金基准价 755.85 高度吻合）。
+  - 2026 年 11 月预算进度：已用 **1,200 RMB**，本月剩余可用预算 **1,800 RMB**（因单笔最低 1,200 RMB，本月最多还可再执行 1 笔 1,200–1,800 RMB 买入）。
+- **已更新并同步至远端仓库**：
+  - [x] `config/portfolio.json` 更新最新本金、均价、克数、单笔最低 1,200 元约束、11 月剩余预算及 `trade_history`。
+  - [x] `cloud/gold_daily_compute.py` 适配 `min_single_buy_cny` 与跨月自动重置剩余预算逻辑，避免未来投委会给出低于 1,200 元的无效建议。
