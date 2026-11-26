@@ -1,11 +1,8 @@
 name: Gold 06:00 Pre-Market Compute
 
 on:
-  schedule:
-    # UTC 22:00 Sun-Thu == Beijing Time (UTC+8) 06:00 Mon-Fri
-    # 如希望周六早上也汇总周五夜盘收盘，可改为: '0 22 * * 0-5'
-    # 如希望每天都跑（含周末），可改为: '0 22 * * *'
-    - cron: "0 22 * * 0-4"
+  # 已停用每日云端定时触发（当前改用本地 Antigravity 定时运行）；
+  # 仅保留 workflow_dispatch 方便未来如需手动在 GitHub Actions 触发。
   workflow_dispatch:
     inputs:
       force_full:

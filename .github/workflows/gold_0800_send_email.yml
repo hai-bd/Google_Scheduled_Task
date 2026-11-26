@@ -1,10 +1,8 @@
 name: Gold 08:00 Exact Email Dispatch
 
 on:
-  schedule:
-    # UTC 23:45 Sun-Thu == Beijing Time (UTC+8) 07:45 Mon-Fri
-    # 提前 15 分钟启动以吸收 GitHub Actions 队列抖动，脚本内部会精准等到 08:00:00 CST 准点发信
-    - cron: "45 23 * * 0-4"
+  # 已停用每日云端定时发信（当前改用本地运行发信）；
+  # 仅保留 workflow_dispatch 方便未来如需手动在 GitHub Actions 触发。
   workflow_dispatch:
     inputs:
       no_wait:

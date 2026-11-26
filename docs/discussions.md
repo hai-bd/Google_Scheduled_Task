@@ -140,3 +140,9 @@
     - `04 ｜ 投委会表决矩阵`（4 行 × 一句话核心逻辑）
     - `05 ｜ 关键风险提示`（3 条标签短句）
   - 严格 0 个人持仓、0 均价、0 盈亏披露。
+
+---
+
+## [2026-11-26 13:38] Discussion #011 — 取消 GitHub Actions 每日定时触发，改为纯本地执行
+
+- **调整内容**：移除 `.github/workflows/gold_0600_compute.yml` 和 `.github/workflows/gold_0800_send_email.yml` 中的 `schedule` 定时触发器，仅保留 `workflow_dispatch` 手动触发入口，避免云端空跑报错或触发失败告警邮件；同步将今日（`2026-11-26_1106`）本地运行档案推送备份至远端。
