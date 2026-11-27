@@ -556,27 +556,25 @@ def compute_quant_and_bullets(
     # Effective shot 1 threshold (mid-month anti-miss-out decay)
     eff_t1 = decay_t1 if (cur_day >= decay_day and shots_used == 0) else t1
 
-    # Universal 3-bullet ladder (for shared privacy-safe email)
-    bullet_ladder = [
-        (
-            "第 1 颗 · 底仓弹",
-            t1,
-            composite_score >= t1,
-            "已达买点 · 可出手" if composite_score >= t1 else f"差 {t1 - composite_score} 分达标",
-        ),
-        (
-            "第 2 颗 · 增强弹",
-            t2,
-            composite_score >= t2,
-            "已达买点 · 可出手" if composite_score >= t2 else f"差 {t2 - composite_score} 分达标",
-        ),
-        (
-            "第 3 颗 · 深坑弹",
-            t3,
-            composite_score >= t3,
-            "已达深坑 · 重手买" if composite_score >= t3 else f"差 {t3 - composite_score} 分达标",
-        ),
+    # Personal 3-bullet status ladder (shows exact used / active / standby status!)
+    shot_defs = [
+        (1, "第 1 颗 · 底仓弹", eff_t1),
+        (2, "第 2 颗 · 增强弹", t2),
+        (3, "第 3 颗 · 深坑弹", t3),
     ]
+    bullet_ladder = []
+    for idx, name, threshold in shot_defs:
+        if idx <= shots_used:
+            bullet_ladder.append((name, threshold, "used", "✅ 本月已用"))
+        elif idx == shots_used + 1:
+            if cooldown_active:
+                bullet_ladder.append((name, threshold, "waiting", f"⏳ 冷却期（刚买过）"))
+            elif composite_score >= threshold:
+                bullet_ladder.append((name, threshold, "triggered", "🔥 当前触发 · 建议出手"))
+            else:
+                bullet_ladder.append((name, threshold, "active", f"🎯 本月待命 · 差 {threshold - composite_score} 分"))
+        else:
+            bullet_ladder.append((name, threshold, "standby", "🔒 顺位待命"))
 
     if composite_score <= tp_th:
         universal_signal = "TAKE_PROFIT_PARTIAL"
@@ -691,10 +689,14 @@ def render_v3_email_html(
     score_zone_label: str,
     cny_price: float | None,
     xau_usd_short: str,
+    avg_cost_cny: float,
+    price_vs_avg_pct: float | None,
+    shots_used: int,
+    remaining_shots: int,
     kline_thermometer_text: str,
     shot_amount_cny: int,
     max_shots_per_month: int,
-    bullet_ladder: list[tuple[str, int, bool, str]],
+    bullet_ladder: list[tuple[str, int, str, str]],
     outlook_bullets: list[tuple[str, str]],
     price_radar: list[tuple[str, str, str, str]],
     steady_option: str,
@@ -702,23 +704,35 @@ def render_v3_email_html(
     specialist_rows: list[tuple[str, str, str]],
     risk_bullets: list[tuple[str, str]],
 ) -> str:
-    """Privacy-safe plain-Chinese Morning Note HTML (NEVER exposes personal holdings/cost/PnL/shots)."""
+    """Personal Plain-Chinese Morning Note HTML (shows avg cost & exact remaining bullets; NEVER shows total holdings/principal/grams/PnL RMB)."""
     esc = html.escape
     badge_bg, action_cn = action_badge_style(action)
     s_color = score_color(composite_score)
     cny_price_str = f"{cny_price} 元/克" if cny_price is not None else "待核实"
+    avg_diff_str = (
+        f"你的均价 {avg_cost_cny:.2f}（现价 {price_vs_avg_pct:+.1f}%）"
+        if price_vs_avg_pct is not None
+        else f"你的均价 {avg_cost_cny:.2f} 元/克"
+    )
 
+    state_styles = {
+        "used": ("#f1f5f9", "#cbd5e1", "#64748b", "#64748b"),
+        "triggered": ("#ecfdf5", "#86efac", "#166534", "#15803d"),
+        "active": ("#eff6ff", "#93c5fd", "#1e40af", "#1d4ed8"),
+        "waiting": ("#fffbeb", "#fcd34d", "#92400e", "#b45309"),
+        "standby": ("#f8fafc", "#e2e8f0", "#475569", "#64748b"),
+    }
     ladder_cells = "".join(
         f"""
         <td style="width:33.3%;padding:4px;vertical-align:top;">
-          <div style="background:{'#ecfdf5' if triggered else '#f8fafc'};border:1px solid {'#86efac' if triggered else '#e2e8f0'};border-radius:6px;padding:9px 8px;text-align:center;">
-            <div style="font-size:11px;font-weight:700;color:{'#166534' if triggered else '#475569'};">{esc(name)}</div>
+          <div style="background:{state_styles.get(st, state_styles['standby'])[0]};border:1px solid {state_styles.get(st, state_styles['standby'])[1]};border-radius:6px;padding:9px 8px;text-align:center;">
+            <div style="font-size:11px;font-weight:700;color:{state_styles.get(st, state_styles['standby'])[2]};">{esc(name)}</div>
             <div style="font-size:14px;font-weight:800;color:#0f172a;margin:3px 0;">门槛 ≥ {threshold} 分</div>
-            <div style="font-size:11px;font-weight:700;color:{'#15803d' if triggered else '#64748b'};">{esc(status)}</div>
+            <div style="font-size:11px;font-weight:700;color:{state_styles.get(st, state_styles['standby'])[3]};">{esc(status)}</div>
           </div>
         </td>
         """
-        for name, threshold, triggered, status in bullet_ladder
+        for name, threshold, st, status in bullet_ladder
     )
 
     outlook_html = "".join(
@@ -793,17 +807,17 @@ def render_v3_email_html(
           <td style="width:34%;padding-right:10px;border-right:1px solid #e2e8f0;vertical-align:top;">
             <div style="font-size:11px;color:#64748b;font-weight:600;">今日参考国内金价</div>
             <div style="font-size:20px;font-weight:800;color:#0f172a;margin-top:3px;">{esc(cny_price_str)}</div>
-            <div style="font-size:11px;color:#64748b;margin-top:2px;">国际：{esc(xau_usd_short)}</div>
+            <div style="font-size:11px;color:#475569;margin-top:2px;font-weight:600;">{esc(avg_diff_str)}</div>
           </td>
           <td style="width:33%;padding:0 12px;border-right:1px solid #e2e8f0;vertical-align:top;">
             <div style="font-size:11px;color:#64748b;font-weight:600;">今日入场性价比分</div>
             <div style="font-size:22px;font-weight:800;color:{s_color};margin-top:2px;">{composite_score} <span style="font-size:12px;font-weight:600;color:#64748b;">/ 100</span></div>
-            <div style="font-size:11px;color:#64748b;margin-top:2px;">{esc(score_zone_label)}</div>
+            <div style="font-size:11px;color:#64748b;margin-top:2px;">{esc(score_zone_label)} · 外盘 {esc(xau_usd_short)}</div>
           </td>
           <td style="width:33%;padding-left:12px;vertical-align:top;">
-            <div style="font-size:11px;color:#64748b;font-weight:600;">总监建议动作</div>
+            <div style="font-size:11px;color:#64748b;font-weight:600;">总监给你的拍板</div>
             <div style="font-size:17px;font-weight:800;color:{badge_bg};margin-top:4px;">{esc(recommended_amount_short)}</div>
-            <div style="font-size:11px;color:#64748b;margin-top:3px;">模型：每月最多{max_shots_per_month}笔×{shot_amount_cny:,}元</div>
+            <div style="font-size:11px;color:#475569;margin-top:3px;font-weight:600;">本月子弹：已用 {shots_used}/{max_shots_per_month} 颗 · 剩 {remaining_shots} 颗</div>
           </td>
         </tr>
       </table>
@@ -872,7 +886,7 @@ def render_v3_email_html(
       </div>
 
       <div style="margin-top:18px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:11.5px;color:#64748b;line-height:1.55;">
-        <div>免责声明：本晨报由多 Agent 量化投研系统自动整理，按「每月最多 {max_shots_per_month} 笔 × {shot_amount_cny:,} 元」通用算法模型测算，不含个人持仓或个人交易次数，仅供学习与决策参考，不构成持牌金融投资建议。</div>
+        <div>免责声明：本晨报由多 Agent 量化投研系统自动整理，仅面向本人邮箱，按「每月最多 {max_shots_per_month} 笔 × {shot_amount_cny:,} 元」算法测算（不含持仓总金额与克数），仅供学习与决策参考，不构成持牌金融投资建议。</div>
       </div>
     </div>
   </div>
@@ -1121,16 +1135,19 @@ pm_prompt = f"""{ISOLATION_GUARD}
 你是顶级多策略基金的【唯一拍板官：首席投资总监（Chief Portfolio Manager）】。今天是 {TODAY_STR}。
 下面 5 位专业顾问已经各自独立提交了最锋利的情报和打分，Python 算法引擎也已经算出了**今日入场性价比综合分（{quant['composite_score']}/100）**和**3 颗子弹（每次 1,200 元，每月最多 3 次）动态门槛结果**。
 
-现在由你做**最终唯一拍板**，同时生成两套严格区分受众的输出：
-- **对外共享邮件字段**（`universal_action`, `headline`, `plain_takeaway`, `recommended_amount_short`, `kline_thermometer_plain`, `steady_option_plain`, `bold_option_plain`, `macro_one_liner`, `short_term_one_liner`, `long_term_one_liner`, `radar_*`, `specialist_email_lines`, `risk_items`, `public_decision_markdown`）：
-  1. **严格隐私脱敏**：绝不允许出现任何个人持仓金额、个人均价（如 840.31）、个人克数、个人浮亏，**也不要暴露“你这个月已经用了几颗子弹”**！只按「通用每月最多 3 笔 × 1,200 元（第 1 颗 ≥ 65 分 / 第 2 颗 ≥ 72 分 / 第 3 颗 ≥ 80 分）」和客观综合分（{quant['composite_score']} 分）给出清晰结论。
-  2. **彻底大白话，禁用金融黑话与英文缩写**：绝对禁止出现 `PCE`、`CPI`、`GDP`、`FOMC`、`ATR`、`DXY`、`ETF`、`RSI`、`MA20`、`赔率`、`收破`、`滞涨`、`去杠杆`、`右侧`、`左侧`、`点阵图` 等词！全部用普通人 20 秒秒懂的大白话表达（比如把 RSI/分位翻译成“当前价格处于近一个月偏低位置，比过去 30 天里大多数日子便宜”）。
-  3. **稳胆平衡，不偏不倚**：`universal_action` 严格尊重通用算法信号（`{quant['universal_signal']}`）；同时在 `steady_option_plain`（≤ 44字）和 `bold_option_plain`（≤ 44字）里分别把「稳健做法」和「大胆做法」的实用白天价位说清楚！
-  4. **4 个价位卡必须清晰分开不重叠**：`radar_defense` 必须严格低于 `radar_dip_buy` 下沿至少 15 元以上；`note` 每条 ≤ 12 字。
-  5. `specialist_email_lines` 恰好 5 条，对应 5 位专家（`宏观与行业` / `K线短线派` / `长线定投派` / `激进机会派` / `保守风控派`），`score_badge` 写如 `72分` 或 `扣10分`，`signal` ≤ 26 字大白话。
-  6. `risk_items` 恰好 3 条大白话。
-- **本地私密记录字段**（`personal_action`, `personal_private_note_markdown`）：
-  - 仅写入用户本机档案 `04_decision.md`，这里可以结合用户的真实本月子弹进度（`personal_state`：本月已用 {quant['personal_state']['shots_used']}/3 颗、剩余 {quant['personal_state']['remaining_shots']} 颗、下次是第 {quant['personal_state']['next_shot_number']} 颗门槛 {quant['personal_state']['active_threshold']} 分，下月 1 日自动重置为 0/3 颗）给出精准个人执行备忘！
+现在由你做**最终唯一拍板**（本邮件仅发给用户本人，不再抄送他人！），请严格遵守以下规则：
+1. **如实按用户的真实当月子弹进度拍板**：
+   - 用户本月（{quant['personal_state']['month']}）**已用 {quant['personal_state']['shots_used']}/{quant['max_shots_per_month']} 颗子弹，剩余 {quant['personal_state']['remaining_shots']} 颗**（下一颗为第 {quant['personal_state']['next_shot_number']} 颗，触发门槛 **{quant['personal_state']['active_threshold']} 分**；次月 1 日自动刷新为 0/3 颗）；
+   - 今日客观综合买点分为 **{quant['composite_score']}/100**，算法对用户本人的精准拍板为 **`{quant['personal_state']['personal_signal']}`**（理由：{quant['personal_state']['personal_reason']}）。
+   - 因此 `personal_action`、`headline`、`plain_takeaway`、`recommended_amount_short` 必须**完全以用户本人的真实剩余子弹进度为准**！同时顺带一句说明“市场本身今日得分 {quant['composite_score']} 分处于什么水平”，让用户清清楚楚！
+2. **隐私边界（非常重要）**：
+   - **允许且鼓励如实展示**：用户的**持仓均价（{quant['personal_state']['average_cost_cny_per_gram']} 元/克）**、现价比均价低/高多少百分比、以及本月已用/剩余几颗子弹；
+   - **严禁出现在邮件字段中**：用户的**持仓总金额（本金/市值）、持有克数、以及账面盈亏绝对元数**！（只留在 `personal_private_note_markdown` 本地留档即可。）
+3. **彻底大白话，禁用金融黑话与英文缩写**：绝对禁止出现 `PCE`、`CPI`、`GDP`、`FOMC`、`ATR`、`DXY`、`ETF`、`RSI`、`MA20`、`赔率`、`收破`、`滞涨`、`去杠杆`、`右侧`、`左侧`、`点阵图` 等词！全部用普通人 20 秒秒懂的大白话表达。
+4. **稳胆平衡**：在 `steady_option_plain`（≤ 44字）和 `bold_option_plain`（≤ 44字）里分别把「稳健做法」和「大胆做法」的实用白天价位说清楚！
+5. **4 个价位卡必须清晰分开不重叠**：`radar_defense` 必须严格低于 `radar_dip_buy` 下沿至少 15 元以上；`note` 每条 ≤ 12 字。
+6. `specialist_email_lines` 恰好 5 条，对应 5 位专家（`宏观与行业` / `K线短线派` / `长线定投派` / `激进机会派` / `保守风控派`），`score_badge` 写如 `72分` 或 `扣10分`，`signal` ≤ 26 字大白话。
+7. `risk_items` 恰好 3 条大白话。
 
 【5 专家汇总 + 量化算法状态包】
 {pm_briefing}
@@ -1254,10 +1271,10 @@ md_decision = f"""# 04 首席投资总监最终决策单（{RUN_ID}）
 
 > **{pm_decision['headline']}**
 
-## 一、通用市场与 3 颗子弹算法结论（对应邮件对外版，已脱敏）
-- **今日参考国内金价**：{cny_price if cny_price is not None else '待核实'} RMB/克
+## 一、本人邮件版决策（含个人均价与本月剩余子弹进度，不含持仓总金额与克数）
+- **今日参考国内金价**：{cny_price if cny_price is not None else '待核实'} RMB/克（你的均价 {ps['average_cost_cny_per_gram']} RMB/克，现价 {ps['unrealized_pnl_pct']:+.2f}%）
 - **今日综合入场性价比分**：**{quant['composite_score']} / 100**（{quant['score_zone_label']}）
-- **通用算法拍板**：`{pm_decision['universal_action']}` — {pm_decision['recommended_amount_short']}
+- **总监给你的拍板**：`{pm_decision['personal_action']}` — {pm_decision['recommended_amount_short']}（本月已用 {ps['shots_used']}/{quant['max_shots_per_month']} 颗 · 剩 {ps['remaining_shots']} 颗；市场通用信号 `{pm_decision['universal_action']}`）
 - **一句话看懂今天**：{pm_decision['plain_takeaway']}
 - **🛡️ 稳健做法**：{pm_decision['steady_option_plain']}
 - **🔥 大胆做法**：{pm_decision['bold_option_plain']}
@@ -1266,7 +1283,7 @@ md_decision = f"""# 04 首席投资总监最终决策单（{RUN_ID}）
 
 ---
 
-## 二、仅限本地查看 · 个人账户与当月子弹备忘（绝不发进邮件）
+## 二、仅限本地查看 · 完整持仓金额、克数与盈亏明细（绝不发进邮件）
 - **当前持仓**：本金 {ps['principal_cny']} RMB / 均价 {ps['average_cost_cny_per_gram']} RMB/克 / 浮亏盈 {pnl_str}
 - **本月子弹进度（{ps['month']}）**：已用 **{ps['shots_used']} / {quant['max_shots_per_month']} 颗**，剩余 **{ps['remaining_shots']} 颗**（下次为第 {ps['next_shot_number']} 颗，门槛 **{ps['active_threshold']} 分**；次月 1 日自动刷新为 0/3 颗）
 - **个人精准拍板**：`{pm_decision['personal_action']}` — {ps['personal_reason']}
@@ -1274,7 +1291,10 @@ md_decision = f"""# 04 首席投资总监最终决策单（{RUN_ID}）
 {pm_decision['personal_private_note_markdown']}
 """
 
-xau_short = intel["market"]["xau_usd_price"].split("（")[0].split("(")[0].strip()[:28]
+raw_xau_head = intel["market"]["xau_usd_price"].split("（")[0].split("(")[0].strip()
+xau_short = raw_xau_head.replace("USD/oz", "美元").replace(" ", "")
+if len(xau_short) > 22:
+    xau_short = raw_xau_head.split("-")[0].strip().replace("USD/oz", "").strip() + "美元"
 price_radar = [
     ("跌到这儿考虑买", pm_decision["radar_dip_buy"]["price_range"], pm_decision["radar_dip_buy"]["note"], "#16a34a"),
     ("跌破这儿先停买", pm_decision["radar_defense"]["price_range"], pm_decision["radar_defense"]["note"], "#dc2626"),
@@ -1286,18 +1306,22 @@ risk_bullets = [(r["tag"], r["desc"]) for r in pm_decision["risk_items"]]
 
 email_subject = (
     f"【黄金晨报 {TODAY_STR}】买点分 {quant['composite_score']}/100 · "
-    f"{pm_decision['recommended_amount_short']} | 国内 {cny_price or 'N/A'} 元/克"
+    f"{pm_decision['recommended_amount_short']}（本月剩{ps['remaining_shots']}颗）| 国内 {cny_price or 'N/A'} 元/克"
 )
 email_html = render_v3_email_html(
     date_str=TODAY_STR,
     headline=pm_decision["headline"],
     plain_takeaway=pm_decision["plain_takeaway"],
-    action=pm_decision["universal_action"],
+    action=pm_decision["personal_action"],
     recommended_amount_short=pm_decision["recommended_amount_short"],
     composite_score=quant["composite_score"],
     score_zone_label=quant["score_zone_label"],
     cny_price=cny_price,
     xau_usd_short=xau_short,
+    avg_cost_cny=ps["average_cost_cny_per_gram"],
+    price_vs_avg_pct=ps["unrealized_pnl_pct"],
+    shots_used=ps["shots_used"],
+    remaining_shots=ps["remaining_shots"],
     kline_thermometer_text=pm_decision["kline_thermometer_plain"],
     shot_amount_cny=quant["shot_amount_cny"],
     max_shots_per_month=quant["max_shots_per_month"],
@@ -1313,6 +1337,35 @@ email_html = render_v3_email_html(
     specialist_rows=spec_rows,
     risk_bullets=risk_bullets,
 )
+
+email_plain_lines = [
+    f"黄金投研晨报（{TODAY_STR}）",
+    f"标题：{pm_decision['headline']}",
+    f"总监给你的拍板：{pm_decision['recommended_amount_short']}（{pm_decision['personal_action']}）",
+    f"今日国内参考金价：{cny_price if cny_price is not None else '待核实'} 元/克 ｜ 你的均价：{ps['average_cost_cny_per_gram']:.2f} 元/克（现价 {ps['unrealized_pnl_pct']:+.1f}%）"
+    if ps["unrealized_pnl_pct"] is not None
+    else f"今日国内参考金价：{cny_price if cny_price is not None else '待核实'} 元/克 ｜ 你的均价：{ps['average_cost_cny_per_gram']:.2f} 元/克",
+    f"今日入场性价比分：{quant['composite_score']}/100（{quant['score_zone_label']}）",
+    f"本月子弹进度：已用 {ps['shots_used']}/{quant['max_shots_per_month']} 颗 · 剩 {ps['remaining_shots']} 颗",
+    "",
+    f"【一句话看懂今天】{pm_decision['plain_takeaway']}",
+    "",
+    f"【K线位置温度计】{pm_decision['kline_thermometer_plain']}",
+    "【3 颗子弹算法触发灯】",
+] + [f"- {name}（门槛 ≥ {th} 分）：{st_txt}" for name, th, _, st_txt in quant["bullet_ladder"]] + [
+    "",
+    f"【稳健做法】{pm_decision['steady_option_plain']}",
+    f"【大胆做法】{pm_decision['bold_option_plain']}",
+    "",
+    "【盯住这 4 个实用价格】",
+] + [f"- {lbl}：{rng}（{nt}）" for lbl, rng, nt, _ in price_radar] + [
+    "",
+    "【5 位顾问各 1 句干货】",
+] + [f"- {r}（{sc}）：{sg}" for r, sc, sg in spec_rows] + [
+    "",
+    "【近期最需要注意的 3 个风险】",
+] + [f"- 【{tg}】{ds}" for tg, ds in risk_bullets]
+email_plain_text = "\n".join(email_plain_lines) + "\n"
 
 raw_payload = {
     "version": "v3_quant_5specialist_1pm",
@@ -1338,6 +1391,7 @@ def write_archive(target_run_dir: Path, update_ledger_path: Path | None, dispatc
     (target_run_dir / "02_specialists.md").write_text(md_specialists, encoding="utf-8")
     (target_run_dir / "04_decision.md").write_text(md_decision, encoding="utf-8")
     (target_run_dir / "email.html").write_text(email_html, encoding="utf-8")
+    (target_run_dir / "email_plain.txt").write_text(email_plain_text, encoding="utf-8")
     (target_run_dir / "raw_result.json").write_text(
         json.dumps(raw_payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -1360,7 +1414,7 @@ def write_archive(target_run_dir: Path, update_ledger_path: Path | None, dispatc
             "subject": email_subject,
             "recipient": "3518109978@qq.com",
             "html_path": str(target_run_dir / "email.html"),
-            "text_path": str(target_run_dir / "04_decision.md"),
+            "text_path": str(target_run_dir / "email_plain.txt"),
             "sent": False,
         }
         dispatch_path.write_text(json.dumps(dispatch_payload, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -1,16 +1,13 @@
 """
-Plain-Chinese Institutional Morning Note HTML Renderer (v3 — 5-Specialist + 1-PM + 3-Bullet Quant)
+Plain-Chinese Institutional Morning Note HTML & Plain-Text Renderer
+(v3 Personal Edition — 5-Specialist + 1-PM + 3-Bullet Quant)
 
 Design principles:
-  - 20-second scannable, ZERO finance jargon, ZERO personal holdings/avg cost/PnL/personal shot history
-  - Highlights:
-      * Top Banner + 3-Column KPI Strip (Domestic Gold Price | Composite Buy Score 0-100 | PM Final Action)
-      * Plain-Chinese 1-sentence Takeaway Box ("💡 一句话看懂今天")
-      * K-Line Price Thermometer + 3-Bullet Universal Trigger Ladder (第1颗≥65分 / 第2颗≥72分 / 第3颗≥80分)
-      * 4 Non-Overlapping Plain-Language Price Cards (跌到这儿买 / 跌破这儿停买 / 短线赚点卖 / 长线大赚卖)
-      * Steady vs Bold Dual-Track Reference ("🛡️ 稳健做法 vs 🔥 大胆做法")
-      * 5 Independent Specialists' Sharpest 1-Line Signals & Scores
-      * Top 3 Plain-Language Risks
+  - 20-second scannable, ZERO finance jargon
+  - Exclusive to user's own email (3518109978@qq.com):
+      * ALLOWED & SHOWN: user's personal average cost (e.g. 840.31 RMB/g), % diff vs spot,
+        exact monthly bullet progress (已用 X/3 颗 · 剩 Y 颗), and personal PM decision.
+      * STRICTLY FORBIDDEN: total holding principal/market value, grams, and absolute PnL RMB.
 """
 
 from __future__ import annotations
@@ -20,7 +17,7 @@ import html
 
 def action_badge_style(action: str) -> tuple[str, str]:
     return {
-        "BUY_SHOT": ("#0f766e", "触发买点 · 建议出手 1 笔 (1,200元)"),
+        "BUY_SHOT": ("#0f766e", "触发买点 · 建议买 1 笔 (1,200元)"),
         "BUY_PARTIAL": ("#0369a1", "建议逢低买 1 笔 (1,200元)"),
         "BUY_FULL": ("#0f766e", "强买点 · 建议果断出手"),
         "HOLD": ("#475569", "暂不扣扳机 · 留好子弹"),
@@ -50,10 +47,14 @@ def render_v3_morning_note(
     score_zone_label: str,
     cny_price_str: str,
     xau_usd_short: str,
+    avg_cost_cny: float,
+    price_vs_avg_pct: float | None,
+    shots_used: int,
+    remaining_shots: int,
     kline_thermometer_text: str,
     shot_amount_cny: int = 1200,
     max_shots_per_month: int = 3,
-    bullet_ladder: list[tuple[str, int, bool, str]],
+    bullet_ladder: list[tuple[str, int, str, str]],
     outlook_bullets: list[tuple[str, str]],
     price_radar: list[tuple[str, str, str, str]],
     steady_option: str,
@@ -64,24 +65,37 @@ def render_v3_morning_note(
 ) -> str:
     """
     Parameters:
-      - bullet_ladder: [(shot_name, threshold, is_triggered, status_text), ...]
+      - bullet_ladder: [(shot_name, threshold, state_key, status_text), ...]
+        where state_key is one of "used" | "triggered" | "active" | "waiting" | "standby"
       - specialist_rows: [(role_name, score_badge, one_line_value_signal), ...] (5 rows)
     """
     esc = html.escape
     badge_bg, action_cn = action_badge_style(action)
     s_color = score_color(composite_score)
+    avg_diff_str = (
+        f"你的均价 {avg_cost_cny:.2f}（现价 {price_vs_avg_pct:+.1f}%）"
+        if price_vs_avg_pct is not None
+        else f"你的均价 {avg_cost_cny:.2f} 元/克"
+    )
 
+    state_styles = {
+        "used": ("#f1f5f9", "#cbd5e1", "#64748b", "#64748b"),
+        "triggered": ("#ecfdf5", "#86efac", "#166534", "#15803d"),
+        "active": ("#eff6ff", "#93c5fd", "#1e40af", "#1d4ed8"),
+        "waiting": ("#fffbeb", "#fcd34d", "#92400e", "#b45309"),
+        "standby": ("#f8fafc", "#e2e8f0", "#475569", "#64748b"),
+    }
     ladder_cells = "".join(
         f"""
         <td style="width:33.3%;padding:4px;vertical-align:top;">
-          <div style="background:{'#ecfdf5' if triggered else '#f8fafc'};border:1px solid {'#86efac' if triggered else '#e2e8f0'};border-radius:6px;padding:9px 8px;text-align:center;">
-            <div style="font-size:11px;font-weight:700;color:{'#166534' if triggered else '#475569'};">{esc(name)}</div>
+          <div style="background:{state_styles.get(st, state_styles['standby'])[0]};border:1px solid {state_styles.get(st, state_styles['standby'])[1]};border-radius:6px;padding:9px 8px;text-align:center;">
+            <div style="font-size:11px;font-weight:700;color:{state_styles.get(st, state_styles['standby'])[2]};">{esc(name)}</div>
             <div style="font-size:14px;font-weight:800;color:#0f172a;margin:3px 0;">门槛 ≥ {threshold} 分</div>
-            <div style="font-size:11px;font-weight:700;color:{'#15803d' if triggered else '#64748b'};">{esc(status)}</div>
+            <div style="font-size:11px;font-weight:700;color:{state_styles.get(st, state_styles['standby'])[3]};">{esc(status)}</div>
           </div>
         </td>
         """
-        for name, threshold, triggered, status in bullet_ladder
+        for name, threshold, st, status in bullet_ladder
     )
 
     outlook_html = "".join(
@@ -164,17 +178,17 @@ def render_v3_morning_note(
           <td style="width:34%;padding-right:10px;border-right:1px solid #e2e8f0;vertical-align:top;">
             <div style="font-size:11px;color:#64748b;font-weight:600;">今日参考国内金价</div>
             <div style="font-size:20px;font-weight:800;color:#0f172a;margin-top:3px;">{esc(cny_price_str)}</div>
-            <div style="font-size:11px;color:#64748b;margin-top:2px;">国际：{esc(xau_usd_short)}</div>
+            <div style="font-size:11px;color:#475569;margin-top:2px;font-weight:600;">{esc(avg_diff_str)}</div>
           </td>
           <td style="width:33%;padding:0 12px;border-right:1px solid #e2e8f0;vertical-align:top;">
             <div style="font-size:11px;color:#64748b;font-weight:600;">今日入场性价比分</div>
             <div style="font-size:22px;font-weight:800;color:{s_color};margin-top:2px;">{composite_score} <span style="font-size:12px;font-weight:600;color:#64748b;">/ 100</span></div>
-            <div style="font-size:11px;color:#64748b;margin-top:2px;">{esc(score_zone_label)}</div>
+            <div style="font-size:11px;color:#64748b;margin-top:2px;">{esc(score_zone_label)} · 外盘 {esc(xau_usd_short)}</div>
           </td>
           <td style="width:33%;padding-left:12px;vertical-align:top;">
-            <div style="font-size:11px;color:#64748b;font-weight:600;">总监建议动作</div>
+            <div style="font-size:11px;color:#64748b;font-weight:600;">总监给你的拍板</div>
             <div style="font-size:17px;font-weight:800;color:{badge_bg};margin-top:4px;">{esc(recommended_amount_short)}</div>
-            <div style="font-size:11px;color:#64748b;margin-top:3px;">模型：每月最多{max_shots_per_month}笔×{shot_amount_cny:,}元</div>
+            <div style="font-size:11px;color:#475569;margin-top:3px;font-weight:600;">本月子弹：已用 {shots_used}/{max_shots_per_month} 颗 · 剩 {remaining_shots} 颗</div>
           </td>
         </tr>
       </table>
@@ -264,7 +278,7 @@ def render_v3_morning_note(
 
       <div style="margin-top:18px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:11.5px;color:#64748b;line-height:1.55;">
         {footer_extra}
-        <div>免责声明：本晨报由多 Agent 量化投研系统自动整理，按「每月最多 {max_shots_per_month} 笔 × {shot_amount_cny:,} 元」通用算法模型测算，不含个人持仓或个人交易次数，仅供学习与决策参考，不构成持牌金融投资建议。</div>
+        <div>免责声明：本晨报由多 Agent 量化投研系统自动整理，仅面向本人邮箱，按「每月最多 {max_shots_per_month} 笔 × {shot_amount_cny:,} 元」算法测算（不含持仓总金额与克数），仅供学习与决策参考，不构成持牌金融投资建议。</div>
       </div>
     </div>
 
@@ -272,3 +286,64 @@ def render_v3_morning_note(
 </body>
 </html>
 """
+
+
+def render_v3_plain_text(
+    *,
+    date_str: str,
+    headline: str,
+    plain_takeaway: str,
+    action: str,
+    recommended_amount_short: str,
+    composite_score: int,
+    score_zone_label: str,
+    cny_price_str: str,
+    avg_cost_cny: float,
+    price_vs_avg_pct: float | None,
+    shots_used: int,
+    remaining_shots: int,
+    kline_thermometer_text: str,
+    max_shots_per_month: int = 3,
+    bullet_ladder: list[tuple[str, int, str, str]],
+    outlook_bullets: list[tuple[str, str]],
+    price_radar: list[tuple[str, str, str, str]],
+    steady_option: str,
+    bold_option: str,
+    specialist_rows: list[tuple[str, str, str]],
+    risk_bullets: list[tuple[str, str]],
+) -> str:
+    """Plain-text MIME fallback guaranteed free of total holdings/principal/grams/absolute PnL RMB."""
+    avg_line = (
+        f"今日参考国内金价：{cny_price_str} ｜ 你的均价：{avg_cost_cny:.2f} 元/克（现价 {price_vs_avg_pct:+.1f}%）"
+        if price_vs_avg_pct is not None
+        else f"今日参考国内金价：{cny_price_str} ｜ 你的均价：{avg_cost_cny:.2f} 元/克"
+    )
+    lines = [
+        f"黄金投研晨报（{date_str}）",
+        f"标题：{headline}",
+        f"总监给你的拍板：{recommended_amount_short}（{action}）",
+        avg_line,
+        f"今日入场性价比分：{composite_score}/100（{score_zone_label}）",
+        f"本月子弹进度：已用 {shots_used}/{max_shots_per_month} 颗 · 剩 {remaining_shots} 颗",
+        "",
+        f"【一句话看懂今天】{plain_takeaway}",
+        "",
+        f"【K线位置温度计】{kline_thermometer_text}",
+        "【3 颗子弹算法触发灯】",
+    ]
+    lines.extend(f"- {name}（门槛 ≥ {th} 分）：{st_txt}" for name, th, _, st_txt in bullet_ladder)
+    lines.extend([
+        "",
+        f"【稳健做法】{steady_option}",
+        f"【大胆做法】{bold_option}",
+        "",
+        "【盯住这 4 个实用价格】",
+    ])
+    lines.extend(f"- {lbl}：{rng}（{nt}）" for lbl, rng, nt, _ in price_radar)
+    lines.extend(["", "【现在黄金是什么行情】"])
+    lines.extend(f"- {tag}：{desc}" for tag, desc in outlook_bullets)
+    lines.extend(["", "【5 位专业顾问各 1 句干货】"])
+    lines.extend(f"- {role}（{sc}）：{sig}" for role, sc, sig in specialist_rows)
+    lines.extend(["", "【近期最需要注意的 3 个风险】"])
+    lines.extend(f"- 【{tag}】{desc}" for tag, desc in risk_bullets)
+    return "\n".join(lines) + "\n"

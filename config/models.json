@@ -37,8 +37,7 @@
   "email": {
     "recipient": "3518109978@qq.com",
     "recipients": [
-      "3518109978@qq.com",
-      "2978384374@qq.com"
+      "3518109978@qq.com"
     ],
     "target_send_time_cst": "08:00",
     "timezone": "Asia/Shanghai"

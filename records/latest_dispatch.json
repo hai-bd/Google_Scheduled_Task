@@ -1,11 +1,15 @@
 {
   "date": "2026-11-27",
   "run_id": "2026-11-27_1257",
-  "computed_at_cst": "2026-11-27T13:07:32.647954+08:00",
+  "computed_at_cst": "2026-11-27T13:35:24.838341+08:00",
   "mode": "local_v3_quant",
-  "subject": "【黄金晨报 2026-11-27】买点分 69/100 · 建议 1 笔 1,200 元（第 1 颗底仓弹达标） | 国内 765 元/克",
+  "subject": "【黄金晨报 2026-11-27】买点分 69/100 · 0 元 · 守住最后 1 颗深坑弹（本月剩1颗）| 国内 765 元/克",
   "recipient": "3518109978@qq.com",
   "html_path": "/Users/bytedance/Desktop/Investment/Gold/records/runs/2026-11-27_1257/email.html",
-  "text_path": "/Users/bytedance/Desktop/Investment/Gold/records/runs/2026-11-27_1257/04_decision.md",
-  "sent": false
+  "text_path": "/Users/bytedance/Desktop/Investment/Gold/records/runs/2026-11-27_1257/email_plain.txt",
+  "sent": true,
+  "sent_at_cst": "2026-11-27T13:37:42.051170+08:00",
+  "recipients": [
+    "3518109978@qq.com"
+  ]
 }
