@@ -1,23 +1,41 @@
 {
-  "updated_at": "2026-11-25 23:00",
+  "updated_at": "2026-11-27 12:52",
   "currency": "CNY",
   "benchmark": "国内人民币黄金（上海金 AU9999 / 银行积存金 / 黄金 ETF 综合参考）",
-  "monthly_disposable_budget_cny": 3000,
+  "monthly_disposable_budget_cny": 3600,
   "constraints": {
     "min_single_buy_cny": 1200,
-    "note": "交易平台单笔最低买入金额为 1,200 RMB，所有分批买入建议必须 ≥ 1,200 RMB 或按 0 元观望。"
+    "note": "按「每月最多 3 颗子弹 × 每次 1,200 RMB（弹性 0–3,600 元）」动态阈值算法执行，不硬卡死 3,000 元。"
   },
-  "monthly_budget_tracker": {
+  "allocation_algorithm": {
+    "shot_amount_cny": 1200,
+    "max_shots_per_month": 3,
+    "shot_thresholds": {
+      "shot_1": 65,
+      "shot_2": 72,
+      "shot_3": 80
+    },
+    "mid_month_decay_day": 15,
+    "mid_month_shot1_threshold": 60,
+    "take_profit_score_threshold": 30,
+    "min_cooldown_days": 2,
+    "emergency_drop_override_pct": -2.0
+  },
+  "monthly_shot_tracker": {
     "month": "2026-11",
-    "spent_cny": 1200,
-    "remaining_cny": 1800
+    "shots_used": 2,
+    "max_shots": 3,
+    "remaining_shots": 1,
+    "last_buy_date": "2026-11-25",
+    "last_buy_price_cny_per_gram": 755.97,
+    "note": "2026年11月仅剩最后 1 颗子弹（第3颗深坑机动弹）；进入 2026-12 自动重置为 0/3 颗。"
   },
   "position": {
     "principal_cny": 8392.78,
     "average_cost_cny_per_gram": 840.31,
     "estimated_grams": 9.9877,
     "last_known_cumulative_pnl_cny": -953.57,
-    "privacy_note": "个人真实持仓与均价仅用于本地内部测算，严禁出现在对外发送的 HTML 邮件中。"
+    "privacy_note": "个人真实持仓、均价与个人当月已用子弹数仅用于本地私密报告，严禁出现在对外发送的 HTML 邮件中。"
   },
   "preferences": {
     "horizons": [
@@ -25,13 +43,12 @@
       "long_term_allocation"
     ],
     "allowed_actions": [
-      "BUY_FULL",
-      "BUY_PARTIAL",
+      "BUY_SHOT",
       "HOLD",
       "TAKE_PROFIT_PARTIAL",
       "REDUCE_HEAVY"
     ],
-    "strategy_note": "同时接受短线波段与长线配置；决议覆盖全额买入、分批买入、观望、部分止盈减仓、大幅减仓防守；单笔买入不得低于 1,200 RMB。"
+    "strategy_note": "稳胆结合：5 位专业顾问独立供弹打分 + 真实 K 线分位 + 3 颗子弹动态阈值算法 + 1 位投资总监唯一拍板。"
   },
   "trade_history": [
     {
@@ -40,7 +57,7 @@
       "amount_cny": 1200,
       "post_trade_holding_cny": 8392.78,
       "post_trade_avg_cost_cny_per_gram": 840.31,
-      "note": "加仓 1,200 RMB 后持仓校准为 8,392.78 RMB，均价维持 840.31 RMB/克。"
+      "note": "加仓 1,200 RMB 后持仓校准为 8,392.78 RMB，均价维持 840.31 RMB/克；2026-11 剩余最后 1 颗子弹。"
     }
   ]
 }

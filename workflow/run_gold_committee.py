@@ -1,19 +1,23 @@
 import html
 import json
-from collections import Counter
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 # ==============================================================================
-# Local Antigravity Multi-Agent Gold Investment Decision Workflow
-# Runs on Antigravity flagship models (0 extra API billing) with native search_web.
+# Gold Investment Multi-Agent Quant Decision Workflow (v3)
+# Architecture: Real K-Line Data + 5 Independent Specialists + 3-Bullet Quant
+#               Optimal-Stopping Algorithm + 1 Chief Portfolio Manager (PM)
 #
 # Phases:
-#   1. Parallel Information Collection (Market/FX, Macro/Policy, Geopolitics/Sentiment) [flash]
-#   2. Parallel Multi-Dimensional Analysis (Policy, Short+Long Trend [inherit], Portfolio [flash])
-#   3. 2-Round Heterogeneous Investment Committee Voting & Debate (4 persistent agents) [inherit]
-#   4. Committee Secretary Synthesis [flash] + Markdown Archive + HTML Email + Ledger Update
+#   0. Deterministic 60-Day Daily K-Line Fetcher (Yahoo Finance GC=F + CNY=X, graceful fallback)
+#   1. Parallel Objective Intelligence Collection (3 flash agents with search_web)
+#   2. Parallel 5 Independent Specialist Signals (Macro/Industry, K-Line/Swing,
+#      Long-Term Value, Aggressive Alpha, Conservative Risk — decoupled from wallet!)
+#   3. Deterministic Quant Composite Score (0-100) + 3-Bullet Dynamic Threshold Engine
+#   4. 1 Chief Investment Director (PM) Single Accountable Final Decision +
+#      Privacy-Safe Plain-Chinese HTML Morning Note + Local Private Archive
 # ==============================================================================
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
@@ -41,18 +45,150 @@ ISOLATION_GUARD = (
     "也不要运行任何终端/harness命令。完成后必须通过 finish 工具严格按给定 JSON Schema 返回结果。"
 )
 
-ACTION_LABELS = {
-    "BUY_FULL": "全额买入（动用本月全部或绝大部分剩余预算，可分笔执行）",
-    "BUY_PARTIAL": "分批/部分买入（动用部分月度预算，保留弹药防回调）",
-    "HOLD": "维持观望（暂不新增仓位也不减仓，等待触发价位）",
-    "TAKE_PROFIT_PARTIAL": "部分止盈/减仓（落袋部分利润，保留长线底仓）",
-    "REDUCE_HEAVY": "大幅减仓防守（显著降仓规避短期下行或利多出尽风险）",
-}
+# ------------------------------------------------------------------------------
+# Phase 0: Real 60-Day Daily K-Line Fetcher & Quantitative Technical Indicators
+# ------------------------------------------------------------------------------
 
-ALLOWED_ACTIONS = list(ACTION_LABELS.keys())
+
+def _fetch_yahoo_daily(symbol: str, range_str: str = "3mo", timeout: int = 6) -> list[dict]:
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range={range_str}"
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    result = data["chart"]["result"][0]
+    ts = result["timestamp"]
+    q = result["indicators"]["quote"][0]
+    rows = []
+    for i in range(len(ts)):
+        c = q["close"][i]
+        h = q["high"][i]
+        l = q["low"][i]
+        o = q["open"][i]
+        if c is None:
+            continue
+        rows.append(
+            {
+                "date": datetime.fromtimestamp(ts[i], tz=SHANGHAI_TZ).strftime("%Y-%m-%d"),
+                "open": float(o if o is not None else c),
+                "high": float(h if h is not None else c),
+                "low": float(l if l is not None else c),
+                "close": float(c),
+            }
+        )
+    return rows
+
+
+def _calc_rsi(closes: list[float], period: int = 14) -> float | None:
+    if len(closes) <= period:
+        return None
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        diff = closes[i] - closes[i - 1]
+        gains.append(max(diff, 0.0))
+        losses.append(max(-diff, 0.0))
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100.0 - (100.0 / (1.0 + rs)), 2)
+
+
+def fetch_kline_metrics() -> dict:
+    """Fetch 60-day gold & USD/CNY daily K-lines and compute quantitative indicators."""
+    try:
+        gold_rows = _fetch_yahoo_daily("GC=F", "3mo", timeout=6)
+        fx_rows = _fetch_yahoo_daily("CNY=X", "3mo", timeout=6)
+        if len(gold_rows) < 20 or not fx_rows:
+            return {"available": False, "note": "K线数据不足，交由 Phase 1 联网采集补齐"}
+
+        fx_map = {r["date"]: r["close"] for r in fx_rows}
+        last_fx = fx_rows[-1]["close"]
+
+        cny_candles = []
+        for g in gold_rows:
+            fx = fx_map.get(g["date"], last_fx)
+            factor = fx / 31.1035
+            cny_candles.append(
+                {
+                    "date": g["date"],
+                    "open": round(g["open"] * factor, 2),
+                    "high": round(g["high"] * factor, 2),
+                    "low": round(g["low"] * factor, 2),
+                    "close": round(g["close"] * factor, 2),
+                    "usd_close": round(g["close"], 2),
+                }
+            )
+
+        closes = [c["close"] for c in cny_candles]
+        last = cny_candles[-1]
+        prev = cny_candles[-2]
+        overnight_pct = round(((last["close"] - prev["close"]) / prev["close"]) * 100.0, 2)
+
+        ma5 = round(sum(closes[-5:]) / min(5, len(closes)), 2)
+        ma20 = round(sum(closes[-20:]) / min(20, len(closes)), 2)
+        ma60 = round(sum(closes[-60:]) / min(60, len(closes)), 2)
+        rsi14 = _calc_rsi(closes, 14)
+
+        w20 = cny_candles[-20:]
+        high20 = max(c["high"] for c in w20)
+        low20 = min(c["low"] for c in w20)
+        pct20 = round(((last["close"] - low20) / (high20 - low20)) * 100.0, 1) if high20 > low20 else 50.0
+
+        w60 = cny_candles[-60:]
+        high60 = max(c["high"] for c in w60)
+        low60 = min(c["low"] for c in w60)
+        pct60 = round(((last["close"] - low60) / (high60 - low60)) * 100.0, 1) if high60 > low60 else 50.0
+
+        trs = []
+        for i in range(max(1, len(cny_candles) - 14), len(cny_candles)):
+            h, l, pc = cny_candles[i]["high"], cny_candles[i]["low"], cny_candles[i - 1]["close"]
+            trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+        atr14 = round(sum(trs) / len(trs), 2) if trs else None
+
+        # Quantitative K-line value score (0-100): lower percentile & cooler RSI => higher buy value
+        rsi_val = rsi14 if rsi14 is not None else 50.0
+        rsi_score = max(0.0, min(100.0, (70.0 - rsi_val) * 2.5))
+        pct_score = max(0.0, min(100.0, 100.0 - (0.65 * pct20 + 0.35 * pct60)))
+        objective_kline_score = round(0.60 * pct_score + 0.40 * rsi_score, 1)
+
+        return {
+            "available": True,
+            "source": "Yahoo Finance Daily K-Line (GC=F & CNY=X converted to RMB/g)",
+            "latest_candle_date": last["date"],
+            "latest_close_usd": last["usd_close"],
+            "latest_close_cny_g": last["close"],
+            "overnight_change_pct": overnight_pct,
+            "usdcny_used": round(last_fx, 4),
+            "ma5_cny": ma5,
+            "ma20_cny": ma20,
+            "ma60_cny": ma60,
+            "rsi14": rsi14,
+            "high_20d_cny": high20,
+            "low_20d_cny": low20,
+            "percentile_20d": pct20,
+            "high_60d_cny": high60,
+            "low_60d_cny": low60,
+            "percentile_60d": pct60,
+            "atr14_cny": atr14,
+            "objective_kline_value_score": objective_kline_score,
+            "recent_5_candles": cny_candles[-5:],
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "note": f"直连拉取K线暂不可用（{type(exc).__name__}），改由 Phase 1 联网搜索补齐近30/60日K线区间与均线。",
+        }
+
 
 # ------------------------------------------------------------------------------
-# Schemas
+# JSON Schemas
 # ------------------------------------------------------------------------------
 
 SOURCE_ITEM_SCHEMA = {
@@ -66,57 +202,61 @@ SOURCE_ITEM_SCHEMA = {
     "required": ["title", "source", "date", "key_fact"],
 }
 
-MARKET_INTEL_SCHEMA = {
+MARKET_KLINE_INTEL_SCHEMA = {
     "type": "object",
     "properties": {
         "as_of_date": {"type": "string"},
         "xau_usd_price": {"type": "string"},
+        "overnight_change_pct": {"type": ["number", "null"]},
         "cny_gold_price_per_gram": {"type": ["number", "null"]},
         "cny_gold_price_note": {"type": "string"},
         "usd_cny_rate": {"type": "string"},
         "dxy_index": {"type": "string"},
         "us10y_yield": {"type": "string"},
-        "recent_price_action_summary": {"type": "string"},
+        "kline_30d_range_cny": {"type": "string"},
+        "kline_technical_summary": {"type": "string"},
         "sources": {"type": "array", "items": SOURCE_ITEM_SCHEMA},
     },
     "required": [
         "as_of_date",
         "xau_usd_price",
+        "overnight_change_pct",
         "cny_gold_price_per_gram",
         "cny_gold_price_note",
         "usd_cny_rate",
         "dxy_index",
         "us10y_yield",
-        "recent_price_action_summary",
+        "kline_30d_range_cny",
+        "kline_technical_summary",
         "sources",
     ],
 }
 
-MACRO_INTEL_SCHEMA = {
+MACRO_INDUSTRY_INTEL_SCHEMA = {
     "type": "object",
     "properties": {
-        "fed_policy_summary": {"type": "string"},
+        "fed_and_rates_summary": {"type": "string"},
         "us_macro_data_summary": {"type": "string"},
-        "pboc_and_central_banks_summary": {"type": "string"},
-        "fiscal_and_tariff_policy_summary": {"type": "string"},
+        "central_banks_and_industry_demand": {"type": "string"},
+        "fiscal_fx_policy_summary": {"type": "string"},
         "upcoming_key_events": {"type": "array", "items": {"type": "string"}},
         "sources": {"type": "array", "items": SOURCE_ITEM_SCHEMA},
     },
     "required": [
-        "fed_policy_summary",
+        "fed_and_rates_summary",
         "us_macro_data_summary",
-        "pboc_and_central_banks_summary",
-        "fiscal_and_tariff_policy_summary",
+        "central_banks_and_industry_demand",
+        "fiscal_fx_policy_summary",
         "upcoming_key_events",
         "sources",
     ],
 }
 
-GEO_INTEL_SCHEMA = {
+SENTIMENT_FLOWS_INTEL_SCHEMA = {
     "type": "object",
     "properties": {
         "geopolitics_summary": {"type": "string"},
-        "etf_and_capital_flows_summary": {"type": "string"},
+        "etf_and_institution_flows": {"type": "string"},
         "market_sentiment_label": {
             "type": "string",
             "enum": ["extreme_fear", "fear", "neutral", "greed", "extreme_greed"],
@@ -127,7 +267,7 @@ GEO_INTEL_SCHEMA = {
     },
     "required": [
         "geopolitics_summary",
-        "etf_and_capital_flows_summary",
+        "etf_and_institution_flows",
         "market_sentiment_label",
         "institution_views_summary",
         "crowded_trade_signals",
@@ -135,126 +275,107 @@ GEO_INTEL_SCHEMA = {
     ],
 }
 
-POLICY_ANALYSIS_SCHEMA = {
+SPECIALIST_MACRO_SCHEMA = {
     "type": "object",
     "properties": {
-        "macro_regime": {"type": "string"},
-        "bullish_drivers": {"type": "array", "items": {"type": "string"}},
-        "bearish_drivers": {"type": "array", "items": {"type": "string"}},
-        "noise_vs_signal": {"type": "string"},
-        "fundamental_bias": {
-            "type": "string",
-            "enum": ["bullish", "neutral_bullish", "neutral", "neutral_bearish", "bearish"],
-        },
+        "score_0_to_100": {"type": "integer", "minimum": 0, "maximum": 100},
+        "regime_plain": {"type": "string"},
+        "sharpest_signal_plain": {"type": "string"},
+        "bullish_points": {"type": "array", "items": {"type": "string"}},
+        "bearish_points": {"type": "array", "items": {"type": "string"}},
         "analysis_markdown": {"type": "string"},
     },
     "required": [
-        "macro_regime",
-        "bullish_drivers",
-        "bearish_drivers",
-        "noise_vs_signal",
-        "fundamental_bias",
+        "score_0_to_100",
+        "regime_plain",
+        "sharpest_signal_plain",
+        "bullish_points",
+        "bearish_points",
         "analysis_markdown",
     ],
 }
 
-TREND_ANALYSIS_SCHEMA = {
+SPECIALIST_KLINE_SCHEMA = {
     "type": "object",
     "properties": {
-        "short_term_view": {
-            "type": "string",
-            "enum": ["bullish", "range_bound", "overbought_pullback_risk", "bearish"],
-        },
-        "short_term_horizon_1_4w": {"type": "string"},
-        "key_support_levels_cny_g": {"type": "array", "items": {"type": "string"}},
-        "key_resistance_levels_cny_g": {"type": "array", "items": {"type": "string"}},
-        "long_term_view": {
-            "type": "string",
-            "enum": ["bullish", "neutral_bullish", "neutral", "bearish"],
-        },
-        "long_term_horizon_3_12m": {"type": "string"},
-        "scenario_summary": {"type": "string"},
+        "score_0_to_100": {"type": "integer", "minimum": 0, "maximum": 100},
+        "estimated_30d_percentile": {"type": "integer", "minimum": 0, "maximum": 100},
+        "realistic_dip_buy_zone_cny": {"type": "string"},
+        "defense_break_line_cny": {"type": "string"},
+        "short_tp_zone_cny": {"type": "string"},
+        "sharpest_signal_plain": {"type": "string"},
         "analysis_markdown": {"type": "string"},
     },
     "required": [
-        "short_term_view",
-        "short_term_horizon_1_4w",
-        "key_support_levels_cny_g",
-        "key_resistance_levels_cny_g",
-        "long_term_view",
-        "long_term_horizon_3_12m",
-        "scenario_summary",
+        "score_0_to_100",
+        "estimated_30d_percentile",
+        "realistic_dip_buy_zone_cny",
+        "defense_break_line_cny",
+        "short_tp_zone_cny",
+        "sharpest_signal_plain",
         "analysis_markdown",
     ],
 }
 
-PORTFOLIO_ANALYSIS_SCHEMA = {
+SPECIALIST_LONGTERM_SCHEMA = {
     "type": "object",
     "properties": {
-        "position_health_assessment": {"type": "string"},
-        "buy_scenarios_summary": {"type": "string"},
-        "take_profit_scenarios_summary": {"type": "string"},
-        "risk_guardrails": {"type": "array", "items": {"type": "string"}},
+        "score_0_to_100": {"type": "integer", "minimum": 0, "maximum": 100},
+        "long_tp_zone_cny": {"type": "string"},
+        "sharpest_signal_plain": {"type": "string"},
         "analysis_markdown": {"type": "string"},
     },
     "required": [
-        "position_health_assessment",
-        "buy_scenarios_summary",
-        "take_profit_scenarios_summary",
-        "risk_guardrails",
+        "score_0_to_100",
+        "long_tp_zone_cny",
+        "sharpest_signal_plain",
         "analysis_markdown",
     ],
 }
 
-ROUND1_VOTE_SCHEMA = {
+SPECIALIST_AGGRESSIVE_SCHEMA = {
     "type": "object",
     "properties": {
-        "action": {"type": "string", "enum": ALLOWED_ACTIONS},
-        "recommended_amount_desc": {"type": "string"},
-        "confidence_1_to_10": {"type": "integer", "minimum": 1, "maximum": 10},
-        "short_term_stance": {"type": "string"},
-        "long_term_stance": {"type": "string"},
-        "core_rationale": {"type": "string"},
-        "risk_veto": {"type": "boolean"},
-        "risk_veto_reason": {"type": "string"},
-        "question_for_committee": {"type": "string"},
+        "score_0_to_100": {"type": "integer", "minimum": 0, "maximum": 100},
+        "bold_proposal_plain": {"type": "string"},
+        "cost_of_waiting_plain": {"type": "string"},
+        "sharpest_signal_plain": {"type": "string"},
+        "analysis_markdown": {"type": "string"},
     },
     "required": [
-        "action",
-        "recommended_amount_desc",
-        "confidence_1_to_10",
-        "short_term_stance",
-        "long_term_stance",
-        "core_rationale",
-        "risk_veto",
-        "risk_veto_reason",
-        "question_for_committee",
+        "score_0_to_100",
+        "bold_proposal_plain",
+        "cost_of_waiting_plain",
+        "sharpest_signal_plain",
+        "analysis_markdown",
     ],
 }
 
-ROUND2_VOTE_SCHEMA = {
+SPECIALIST_RISK_SCHEMA = {
     "type": "object",
     "properties": {
-        "changed_mind": {"type": "boolean"},
-        "action": {"type": "string", "enum": ALLOWED_ACTIONS},
-        "recommended_amount_desc": {"type": "string"},
-        "confidence_1_to_10": {"type": "integer", "minimum": 1, "maximum": 10},
-        "response_to_peers": {"type": "string"},
-        "risk_veto": {"type": "boolean"},
-        "risk_veto_reason": {"type": "string"},
-        "trigger_conditions": {"type": "string"},
-        "final_statement": {"type": "string"},
+        "risk_deduction_0_to_20": {"type": "integer", "minimum": 0, "maximum": 20},
+        "steady_proposal_plain": {"type": "string"},
+        "sharpest_signal_plain": {"type": "string"},
+        "top_3_risks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "tag": {"type": "string"},
+                    "desc": {"type": "string"},
+                },
+                "required": ["tag", "desc"],
+            },
+        },
+        "analysis_markdown": {"type": "string"},
     },
     "required": [
-        "changed_mind",
-        "action",
-        "recommended_amount_desc",
-        "confidence_1_to_10",
-        "response_to_peers",
-        "risk_veto",
-        "risk_veto_reason",
-        "trigger_conditions",
-        "final_statement",
+        "risk_deduction_0_to_20",
+        "steady_proposal_plain",
+        "sharpest_signal_plain",
+        "top_3_risks",
+        "analysis_markdown",
     ],
 }
 
@@ -267,12 +388,23 @@ RADAR_ITEM_SCHEMA = {
     "required": ["price_range", "note"],
 }
 
-DECISION_SYNTHESIS_SCHEMA = {
+PM_FINAL_DECISION_SCHEMA = {
     "type": "object",
     "properties": {
+        "universal_action": {
+            "type": "string",
+            "enum": ["BUY_SHOT", "HOLD", "TAKE_PROFIT_PARTIAL", "REDUCE_HEAVY"],
+        },
+        "personal_action": {
+            "type": "string",
+            "enum": ["BUY_SHOT", "HOLD", "TAKE_PROFIT_PARTIAL", "REDUCE_HEAVY"],
+        },
         "headline": {"type": "string"},
+        "plain_takeaway": {"type": "string"},
         "recommended_amount_short": {"type": "string"},
-        "recommended_amount_summary": {"type": "string"},
+        "kline_thermometer_plain": {"type": "string"},
+        "steady_option_plain": {"type": "string"},
+        "bold_option_plain": {"type": "string"},
         "macro_one_liner": {"type": "string"},
         "short_term_one_liner": {"type": "string"},
         "long_term_one_liner": {"type": "string"},
@@ -280,28 +412,16 @@ DECISION_SYNTHESIS_SCHEMA = {
         "radar_defense": RADAR_ITEM_SCHEMA,
         "radar_short_tp": RADAR_ITEM_SCHEMA,
         "radar_long_tp": RADAR_ITEM_SCHEMA,
-        "action_steps": {
+        "specialist_email_lines": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "label": {"type": "string"},
-                    "text": {"type": "string"},
+                    "role": {"type": "string"},
+                    "score_badge": {"type": "string"},
+                    "signal": {"type": "string"},
                 },
-                "required": ["label", "text"],
-            },
-        },
-        "committee_one_liners": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "member": {"type": "string"},
-                    "action": {"type": "string"},
-                    "confidence": {"type": "string"},
-                    "logic": {"type": "string"},
-                },
-                "required": ["member", "action", "confidence", "logic"],
+                "required": ["role", "score_badge", "signal"],
             },
         },
         "risk_items": {
@@ -315,17 +435,18 @@ DECISION_SYNTHESIS_SCHEMA = {
                 "required": ["tag", "desc"],
             },
         },
-        "short_term_plan": {"type": "string"},
-        "long_term_plan": {"type": "string"},
-        "dip_buy_triggers": {"type": "string"},
-        "take_profit_triggers": {"type": "string"},
-        "top_risks": {"type": "array", "items": {"type": "string"}},
-        "decision_markdown": {"type": "string"},
+        "personal_private_note_markdown": {"type": "string"},
+        "public_decision_markdown": {"type": "string"},
     },
     "required": [
+        "universal_action",
+        "personal_action",
         "headline",
+        "plain_takeaway",
         "recommended_amount_short",
-        "recommended_amount_summary",
+        "kline_thermometer_plain",
+        "steady_option_plain",
+        "bold_option_plain",
         "macro_one_liner",
         "short_term_one_liner",
         "long_term_one_liner",
@@ -333,264 +454,315 @@ DECISION_SYNTHESIS_SCHEMA = {
         "radar_defense",
         "radar_short_tp",
         "radar_long_tp",
-        "action_steps",
-        "committee_one_liners",
+        "specialist_email_lines",
         "risk_items",
-        "short_term_plan",
-        "long_term_plan",
-        "dip_buy_triggers",
-        "take_profit_triggers",
-        "top_risks",
-        "decision_markdown",
+        "personal_private_note_markdown",
+        "public_decision_markdown",
     ],
 }
 
 # ------------------------------------------------------------------------------
-# Helper: Quantitative Portfolio Math (Respects min_single_buy & monthly tracker)
+# Quantitative 3-Bullet Optimal-Stopping Engine & Portfolio Math
 # ------------------------------------------------------------------------------
 
 
-def compute_portfolio_metrics(portfolio: dict, current_price_cny: float | None, today_str: str) -> dict:
+def compute_quant_and_bullets(
+    *,
+    portfolio: dict,
+    cny_price: float | None,
+    overnight_chg: float | None,
+    today_str: str,
+    kline_data: dict,
+    specialists: dict,
+) -> dict:
     pos = portfolio["position"]
     principal = float(pos["principal_cny"])
     avg_cost = float(pos["average_cost_cny_per_gram"])
     grams = principal / avg_cost
-    budget = float(portfolio["monthly_disposable_budget_cny"])
-    min_buy = float(portfolio.get("constraints", {}).get("min_single_buy_cny", 1200))
 
-    tracker = portfolio.get("monthly_budget_tracker", {})
-    current_ym = today_str[:7] if len(today_str) >= 7 else ""
-    if current_ym and tracker.get("month") == current_ym:
-        spent_month = float(tracker.get("spent_cny", 0))
-        remaining_month = max(0.0, float(tracker.get("remaining_cny", budget - spent_month)))
+    algo = portfolio.get("allocation_algorithm", {})
+    shot_amt = int(algo.get("shot_amount_cny", 1200))
+    max_shots = int(algo.get("max_shots_per_month", 3))
+    th = algo.get("shot_thresholds", {"shot_1": 65, "shot_2": 72, "shot_3": 80})
+    t1 = int(th.get("shot_1", 65))
+    t2 = int(th.get("shot_2", 72))
+    t3 = int(th.get("shot_3", 80))
+    decay_day = int(algo.get("mid_month_decay_day", 15))
+    decay_t1 = int(algo.get("mid_month_shot1_threshold", 60))
+    tp_th = int(algo.get("take_profit_score_threshold", 30))
+    min_cooldown = int(algo.get("min_cooldown_days", 2))
+    emerg_drop = float(algo.get("emergency_drop_override_pct", -2.0))
+
+    tracker = portfolio.get("monthly_shot_tracker", {})
+    cur_ym = today_str[:7]
+    cur_day = int(today_str[8:10])
+    if tracker.get("month") == cur_ym:
+        shots_used = int(tracker.get("shots_used", 0))
+        last_buy_date = tracker.get("last_buy_date")
+        last_buy_price = tracker.get("last_buy_price_cny_per_gram")
     else:
-        spent_month = 0.0
-        remaining_month = budget
+        # New month auto-reset!
+        shots_used = 0
+        last_buy_date = None
+        last_buy_price = None
 
-    metrics = {
-        "principal_cny": round(principal, 2),
-        "average_cost_cny_per_gram": round(avg_cost, 2),
-        "estimated_grams": round(grams, 4),
-        "monthly_budget_cny": round(budget, 2),
-        "spent_this_month_cny": round(spent_month, 2),
-        "remaining_budget_this_month_cny": round(remaining_month, 2),
-        "min_single_buy_cny": round(min_buy, 2),
-        "current_price_cny_per_gram": current_price_cny,
-    }
+    remaining_shots = max(0, max_shots - shots_used)
 
-    if current_price_cny and current_price_cny > 0:
-        market_value = grams * current_price_cny
-        pnl_cny = market_value - principal
-        pnl_pct = (pnl_cny / principal) * 100.0
-        metrics.update(
-            {
-                "current_market_value_cny": round(market_value, 2),
-                "unrealized_pnl_cny": round(pnl_cny, 2),
-                "unrealized_pnl_pct": round(pnl_pct, 2),
-                "add_scenarios": {},
-                "trim_scenarios": {},
-            }
-        )
-        candidate_adds = sorted(
-            {
-                int(min_buy),
-                int(remaining_month) if remaining_month >= min_buy else int(min_buy),
-                int(budget),
-            }
-        )
-        for add_amt in candidate_adds:
-            if add_amt < min_buy:
-                continue
-            added_g = add_amt / current_price_cny
-            new_principal = principal + add_amt
-            new_grams = grams + added_g
-            new_avg = new_principal / new_grams
-            metrics["add_scenarios"][f"add_{add_amt}_cny"] = {
-                "added_grams": round(added_g, 4),
-                "new_total_principal_cny": round(new_principal, 2),
-                "new_total_grams": round(new_grams, 4),
-                "new_avg_cost_cny_per_gram": round(new_avg, 2),
-                "avg_cost_change_cny": round(new_avg - avg_cost, 2),
-            }
-        for trim_pct in (20, 30, 50):
-            ratio = trim_pct / 100.0
-            sold_g = grams * ratio
-            proceeds = sold_g * current_price_cny
-            cost_part = principal * ratio
-            realized_pnl = proceeds - cost_part
-            metrics["trim_scenarios"][f"trim_{trim_pct}_pct"] = {
-                "sold_grams": round(sold_g, 4),
-                "cash_proceeds_cny": round(proceeds, 2),
-                "realized_pnl_cny": round(realized_pnl, 2),
-                "remaining_grams": round(grams - sold_g, 4),
-                "remaining_principal_cny": round(principal - cost_part, 2),
-            }
-    return metrics
+    # Cooldown check
+    days_since_last_buy = None
+    cooldown_active = False
+    if last_buy_date:
+        try:
+            d_last = datetime.strptime(last_buy_date, "%Y-%m-%d").date()
+            d_now = datetime.strptime(today_str, "%Y-%m-%d").date()
+            days_since_last_buy = (d_now - d_last).days
+            if days_since_last_buy < min_cooldown and not (
+                overnight_chg is not None and overnight_chg <= emerg_drop
+            ):
+                cooldown_active = True
+        except Exception:
+            pass
 
+    # Compute deterministic composite buy-value score (0-100)
+    s_macro = float(specialists["macro"]["score_0_to_100"])
+    s_kline = float(specialists["kline"]["score_0_to_100"])
+    s_long = float(specialists["long_term"]["score_0_to_100"])
+    s_aggr = float(specialists["aggressive"]["score_0_to_100"])
+    r_deduct = float(specialists["risk"]["risk_deduction_0_to_20"])
 
-def resolve_committee_vote(round2_records: list[dict]) -> dict:
-    actions = [r["vote"]["action"] for r in round2_records]
-    counts = Counter(actions)
-    most_common = counts.most_common()
-    top_action, top_count = most_common[0]
-    risk_veto_triggered = any(
-        r["id"] == "risk_redteam" and r["vote"]["risk_veto"] for r in round2_records
-    )
-    any_veto_reasons = [
-        f"{r['name']}: {r['vote']['risk_veto_reason']}"
-        for r in round2_records
-        if r["vote"]["risk_veto"]
+    if kline_data.get("available") and kline_data.get("objective_kline_value_score") is not None:
+        s_obj_kline = float(kline_data["objective_kline_value_score"])
+        raw_alpha = 0.25 * s_kline + 0.20 * s_macro + 0.20 * s_long + 0.20 * s_aggr + 0.15 * s_obj_kline
+    else:
+        # Use K-line specialist's estimated 30d percentile as objective anchor
+        est_pct = float(specialists["kline"]["estimated_30d_percentile"])
+        s_obj_kline = round(100.0 - est_pct, 1)
+        raw_alpha = 0.25 * s_kline + 0.20 * s_macro + 0.20 * s_long + 0.20 * s_aggr + 0.15 * s_obj_kline
+
+    risk_penalty_applied = round(0.60 * r_deduct, 1)
+    composite_score = int(round(max(0.0, min(100.0, raw_alpha - risk_penalty_applied))))
+
+    if composite_score >= 80:
+        score_zone = "黄金深坑区（极划算）"
+    elif composite_score >= 72:
+        score_zone = "高性价比区（值得增强）"
+    elif composite_score >= 65:
+        score_zone = "偏划算区（适合建仓）"
+    elif composite_score > tp_th:
+        score_zone = "中性震荡区（可观察或小步试探）"
+    else:
+        score_zone = "偏贵过热区（适合止盈落袋）"
+
+    # Effective shot 1 threshold (mid-month anti-miss-out decay)
+    eff_t1 = decay_t1 if (cur_day >= decay_day and shots_used == 0) else t1
+
+    # Universal 3-bullet ladder (for shared privacy-safe email)
+    bullet_ladder = [
+        (
+            "第 1 颗 · 底仓弹",
+            t1,
+            composite_score >= t1,
+            "已达买点 · 可出手" if composite_score >= t1 else f"差 {t1 - composite_score} 分达标",
+        ),
+        (
+            "第 2 颗 · 增强弹",
+            t2,
+            composite_score >= t2,
+            "已达买点 · 可出手" if composite_score >= t2 else f"差 {t2 - composite_score} 分达标",
+        ),
+        (
+            "第 3 颗 · 深坑弹",
+            t3,
+            composite_score >= t3,
+            "已达深坑 · 重手买" if composite_score >= t3 else f"差 {t3 - composite_score} 分达标",
+        ),
     ]
 
-    buy_side = {"BUY_FULL", "BUY_PARTIAL"}
-    sell_side = {"TAKE_PROFIT_PARTIAL", "REDUCE_HEAVY"}
-    is_tie = len(most_common) >= 2 and most_common[0][1] == most_common[1][1]
-    has_buy = any(a in buy_side for a in actions)
-    has_sell = any(a in sell_side for a in actions)
-
-    if top_count >= 3:
-        final_action = top_action
-        resolution_rule = f"明显多数通过（{top_count}/4 票）"
-    elif is_tie:
-        tied_actions = {a for a, c in most_common if c == top_count}
-        if (tied_actions & buy_side) and (tied_actions & sell_side):
-            final_action = "HOLD"
-            resolution_rule = "多空平票分歧，触发保守折中规则降级为观望并设双边触发价"
-        elif tied_actions == {"BUY_FULL", "BUY_PARTIAL"}:
-            final_action = "BUY_PARTIAL"
-            resolution_rule = "全买与分批买平票，采用保守分批买入"
-        elif tied_actions == {"BUY_PARTIAL", "HOLD"}:
-            final_action = "HOLD" if risk_veto_triggered else "BUY_PARTIAL"
-            resolution_rule = (
-                "分批买与观望平票且触发风控预警，降级为观望"
-                if risk_veto_triggered
-                else "分批买与观望平票且无风控一票否决，采用最小合规手数分批定投"
-            )
-        elif tied_actions == {"HOLD", "TAKE_PROFIT_PARTIAL"}:
-            final_action = "TAKE_PROFIT_PARTIAL" if risk_veto_triggered else "HOLD"
-            resolution_rule = (
-                "观望与部分止盈平票且触发风控预警，执行小比例部分止盈"
-                if risk_veto_triggered
-                else "观望与部分止盈平票，先观望并设定明确止盈触发线"
-            )
-        elif tied_actions == {"TAKE_PROFIT_PARTIAL", "REDUCE_HEAVY"}:
-            final_action = "TAKE_PROFIT_PARTIAL"
-            resolution_rule = "轻重减仓平票，先执行部分止盈/减仓"
-        else:
-            final_action = "HOLD"
-            resolution_rule = "投票高度分散，默认采用观望并按触发条件执行"
+    if composite_score <= tp_th:
+        universal_signal = "TAKE_PROFIT_PARTIAL"
+    elif composite_score >= t1:
+        universal_signal = "BUY_SHOT"
     else:
-        if has_buy and has_sell and top_action in {"BUY_FULL", "REDUCE_HEAVY"}:
-            final_action = "BUY_PARTIAL" if top_action == "BUY_FULL" else "TAKE_PROFIT_PARTIAL"
-            resolution_rule = "2-1-1 相对多数但存在反向异议，幅度降档执行"
+        universal_signal = "HOLD"
+
+    # Personal next-shot trigger (for local private 04_decision.md ONLY)
+    if remaining_shots == 0:
+        personal_next_shot = None
+        personal_threshold = None
+        personal_signal = "TAKE_PROFIT_PARTIAL" if composite_score <= tp_th else "HOLD"
+        personal_reason = "本月 3 颗子弹已全部用完，等下月 1 日自动刷新。"
+    else:
+        personal_next_shot = shots_used + 1
+        personal_threshold = {1: eff_t1, 2: t2, 3: t3}.get(personal_next_shot, t3)
+        if composite_score <= tp_th:
+            personal_signal = "TAKE_PROFIT_PARTIAL"
+            personal_reason = f"综合买点分降至 {composite_score}（≤ {tp_th}），进入过热区建议部分止盈。"
+        elif cooldown_active:
+            personal_signal = "HOLD"
+            personal_reason = f"距上次买入仅 {days_since_last_buy} 天，处于冷却期（除非单日暴跌 ≥ 2%）。"
+        elif composite_score >= personal_threshold:
+            personal_signal = "BUY_SHOT"
+            personal_reason = f"综合分 {composite_score} ≥ 第 {personal_next_shot} 颗子弹门槛 {personal_threshold}，触发买入 {shot_amt} 元！"
         else:
-            final_action = top_action
-            resolution_rule = f"相对多数通过（{top_count}/4 票）"
+            personal_signal = "HOLD"
+            personal_reason = (
+                f"综合分 {composite_score}，距你本月第 {personal_next_shot} 颗子弹门槛 {personal_threshold} "
+                f"还差 {personal_threshold - composite_score} 分。"
+            )
 
-    if risk_veto_triggered and final_action == "BUY_FULL":
-        final_action = "BUY_PARTIAL"
-        resolution_rule += "；但逆向风控委员触发风险预警，强制将全额买入降级为分批买入"
-
-    avg_conf = round(
-        sum(r["vote"]["confidence_1_to_10"] for r in round2_records) / len(round2_records), 1
-    )
+    pnl_cny = None
+    pnl_pct = None
+    market_value = None
+    if cny_price and cny_price > 0:
+        market_value = round(grams * cny_price, 2)
+        pnl_cny = round(market_value - principal, 2)
+        pnl_pct = round((pnl_cny / principal) * 100.0, 2)
 
     return {
-        "final_action": final_action,
-        "final_action_label": ACTION_LABELS[final_action],
-        "vote_counts": dict(counts),
-        "avg_confidence": avg_conf,
-        "risk_veto_triggered": risk_veto_triggered,
-        "veto_reasons": any_veto_reasons,
-        "resolution_rule": resolution_rule,
+        "composite_score": composite_score,
+        "score_zone_label": score_zone,
+        "score_breakdown": {
+            "macro_industry": s_macro,
+            "kline_swing": s_kline,
+            "long_term_value": s_long,
+            "aggressive_alpha": s_aggr,
+            "objective_kline_percentile_score": s_obj_kline,
+            "raw_alpha": round(raw_alpha, 1),
+            "risk_deduction_raw": r_deduct,
+            "risk_penalty_applied": risk_penalty_applied,
+        },
+        "shot_amount_cny": shot_amt,
+        "max_shots_per_month": max_shots,
+        "bullet_ladder": bullet_ladder,
+        "universal_signal": universal_signal,
+        "personal_state": {
+            "month": cur_ym,
+            "shots_used": shots_used,
+            "remaining_shots": remaining_shots,
+            "next_shot_number": personal_next_shot,
+            "active_threshold": personal_threshold,
+            "cooldown_active": cooldown_active,
+            "last_buy_date": last_buy_date,
+            "last_buy_price_cny": last_buy_price,
+            "personal_signal": personal_signal,
+            "personal_reason": personal_reason,
+            "principal_cny": round(principal, 2),
+            "average_cost_cny_per_gram": round(avg_cost, 2),
+            "estimated_grams": round(grams, 4),
+            "current_market_value_cny": market_value,
+            "unrealized_pnl_cny": pnl_cny,
+            "unrealized_pnl_pct": pnl_pct,
+        },
     }
+
+
+# ------------------------------------------------------------------------------
+# HTML Email Renderer (v3 Plain-Chinese Institutional Morning Note)
+# ------------------------------------------------------------------------------
 
 
 def action_badge_style(action: str) -> tuple[str, str]:
     return {
-        "BUY_FULL": ("#0f766e", "全额分批买入"),
-        "BUY_PARTIAL": ("#0369a1", "逢低分批买入"),
-        "HOLD": ("#475569", "维持观望"),
-        "TAKE_PROFIT_PARTIAL": ("#b45309", "部分止盈减仓"),
-        "REDUCE_HEAVY": ("#b91c1c", "防守减仓"),
+        "BUY_SHOT": ("#0f766e", "触发买点 · 建议买 1 笔 (1,200元)"),
+        "HOLD": ("#475569", "暂不扣扳机 · 留好子弹"),
+        "TAKE_PROFIT_PARTIAL": ("#b45309", "偏贵过热 · 建议先卖出一笔落袋"),
+        "REDUCE_HEAVY": ("#b91c1c", "风险偏高 · 建议减仓避险"),
     }.get(action, ("#334155", action))
 
 
-def render_email_html(
+def score_color(score: int) -> str:
+    if score >= 75:
+        return "#15803d"
+    if score >= 65:
+        return "#0369a1"
+    if score <= 35:
+        return "#b91c1c"
+    return "#b45309"
+
+
+def render_v3_email_html(
     *,
     date_str: str,
     headline: str,
+    plain_takeaway: str,
     action: str,
     recommended_amount_short: str,
-    consensus_text: str,
+    composite_score: int,
+    score_zone_label: str,
     cny_price: float | None,
     xau_usd_short: str,
-    monthly_budget_cny: float,
-    min_single_buy_cny: float,
+    kline_thermometer_text: str,
+    shot_amount_cny: int,
+    max_shots_per_month: int,
+    bullet_ladder: list[tuple[str, int, bool, str]],
     outlook_bullets: list[tuple[str, str]],
     price_radar: list[tuple[str, str, str, str]],
-    action_steps: list[tuple[str, str]],
-    committee_table_rows: list[tuple[str, str, str, str]],
+    steady_option: str,
+    bold_option: str,
+    specialist_rows: list[tuple[str, str, str]],
     risk_bullets: list[tuple[str, str]],
 ) -> str:
-    """Institutional Morning Note HTML (privacy-safe: NEVER exposes personal holdings/cost/PnL)."""
+    """Privacy-safe plain-Chinese Morning Note HTML (NEVER exposes personal holdings/cost/PnL/shots)."""
     esc = html.escape
     badge_bg, action_cn = action_badge_style(action)
+    s_color = score_color(composite_score)
     cny_price_str = f"{cny_price} 元/克" if cny_price is not None else "待核实"
+
+    ladder_cells = "".join(
+        f"""
+        <td style="width:33.3%;padding:4px;vertical-align:top;">
+          <div style="background:{'#ecfdf5' if triggered else '#f8fafc'};border:1px solid {'#86efac' if triggered else '#e2e8f0'};border-radius:6px;padding:9px 8px;text-align:center;">
+            <div style="font-size:11px;font-weight:700;color:{'#166534' if triggered else '#475569'};">{esc(name)}</div>
+            <div style="font-size:14px;font-weight:800;color:#0f172a;margin:3px 0;">门槛 ≥ {threshold} 分</div>
+            <div style="font-size:11px;font-weight:700;color:{'#15803d' if triggered else '#64748b'};">{esc(status)}</div>
+          </div>
+        </td>
+        """
+        for name, threshold, triggered, status in bullet_ladder
+    )
 
     outlook_html = "".join(
         f"""
         <tr>
-          <td style="padding:7px 0;vertical-align:top;width:88px;">
-            <span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#f1f5f9;color:#334155;font-size:12px;font-weight:700;white-space:nowrap;">{esc(tag)}</span>
+          <td style="padding:7px 0;vertical-align:top;width:96px;">
+            <span style="display:inline-block;padding:3px 8px;border-radius:4px;background:#f1f5f9;color:#334155;font-size:12px;font-weight:700;white-space:nowrap;">{esc(tag)}</span>
           </td>
-          <td style="padding:7px 0 7px 10px;color:#1e293b;font-size:13.5px;line-height:1.55;">{esc(desc)}</td>
+          <td style="padding:7px 0 7px 10px;color:#1e293b;font-size:13.5px;line-height:1.6;">{esc(desc)}</td>
         </tr>
         """
         for tag, desc in outlook_bullets
     )
+
     radar_cells = "".join(
         f"""
         <td style="width:25%;padding:4px;vertical-align:top;">
-          <div style="background:#f8fafc;border:1px solid #e2e8f0;border-top:3px solid {accent};border-radius:6px;padding:10px 8px;text-align:center;">
-            <div style="font-size:11px;color:#64748b;font-weight:600;">{esc(label)}</div>
-            <div style="font-size:15px;font-weight:800;color:#0f172a;margin:4px 0 2px;">{esc(price_range)}</div>
-            <div style="font-size:11px;color:#64748b;line-height:1.35;">{esc(note)}</div>
+          <div style="background:#f8fafc;border:1px solid #e2e8f0;border-top:3px solid {accent};border-radius:6px;padding:10px 6px;text-align:center;">
+            <div style="font-size:11px;color:#475569;font-weight:700;line-height:1.35;">{esc(label)}</div>
+            <div style="font-size:15px;font-weight:800;color:#0f172a;margin:6px 0 4px;">{esc(price_range)}</div>
+            <div style="font-size:11px;color:#64748b;line-height:1.4;">{esc(note)}</div>
           </div>
         </td>
         """
         for label, price_range, note, accent in price_radar
     )
-    actions_html = "".join(
+
+    spec_html = "".join(
         f"""
         <tr>
-          <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;width:24px;">
-            <span style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;background:#1e293b;color:#fbbf24;font-size:11px;font-weight:700;">{idx}</span>
-          </td>
-          <td style="padding:8px 10px 8px 4px;border-bottom:1px solid #f1f5f9;font-size:13.5px;color:#0f172a;line-height:1.55;">
-            <strong style="color:#0f172a;">{esc(label)}：</strong>{esc(text)}
-          </td>
-        </tr>
-        """
-        for idx, (label, text) in enumerate(action_steps, start=1)
-    )
-    c_rows = "".join(
-        f"""
-        <tr>
-          <td style="padding:7px 8px;border-bottom:1px solid #f1f5f9;font-weight:600;color:#1e293b;white-space:nowrap;">{esc(name)}</td>
+          <td style="padding:7px 8px;border-bottom:1px solid #f1f5f9;font-weight:700;color:#1e293b;white-space:nowrap;">{esc(role)}</td>
           <td style="padding:7px 8px;border-bottom:1px solid #f1f5f9;white-space:nowrap;">
-            <span style="display:inline-block;padding:2px 7px;border-radius:4px;background:{action_badge_style(vote)[0]};color:#ffffff;font-size:11px;font-weight:700;">{esc(vote)}</span>
+            <span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#f1f5f9;color:#0f172a;font-size:11.5px;font-weight:700;">{esc(score_txt)}</span>
           </td>
-          <td style="padding:7px 8px;border-bottom:1px solid #f1f5f9;color:#475569;white-space:nowrap;">{esc(conf)}</td>
-          <td style="padding:7px 8px;border-bottom:1px solid #f1f5f9;color:#334155;line-height:1.45;">{esc(logic)}</td>
+          <td style="padding:7px 8px;border-bottom:1px solid #f1f5f9;color:#334155;line-height:1.5;">{esc(signal)}</td>
         </tr>
         """
-        for name, vote, conf, logic in committee_table_rows
+        for role, score_txt, signal in specialist_rows
     )
+
     r_items = "".join(
         f"""
-        <li style="margin-bottom:6px;font-size:13px;color:#334155;line-height:1.5;">
-          <strong style="color:#b91c1c;">[{esc(tag)}]</strong> {esc(desc)}
+        <li style="margin-bottom:6px;font-size:13px;color:#334155;line-height:1.55;">
+          <strong style="color:#b91c1c;">【{esc(tag)}】</strong>{esc(desc)}
         </li>
         """
         for tag, desc in risk_bullets
@@ -604,14 +776,14 @@ def render_email_html(
     <div style="background:#0f172a;padding:20px 24px 18px;border-bottom:3px solid #d97706;">
       <table style="width:100%;border-collapse:collapse;">
         <tr>
-          <td style="font-size:11px;letter-spacing:1.4px;color:#f59e0b;font-weight:700;">GOLD RESEARCH · MORNING BRIEFING</td>
-          <td style="text-align:right;font-size:12px;color:#94a3b8;">{esc(date_str)} · 盘前晨报</td>
+          <td style="font-size:11px;letter-spacing:1.2px;color:#f59e0b;font-weight:700;">黄金投研晨报 · 5专家供弹 + 总监拍板版</td>
+          <td style="text-align:right;font-size:12px;color:#94a3b8;">{esc(date_str)}</td>
         </tr>
       </table>
       <h1 style="margin:10px 0 12px;font-size:19px;line-height:1.4;color:#ffffff;font-weight:700;">{esc(headline)}</h1>
       <div>
-        <span style="display:inline-block;padding:4px 11px;border-radius:4px;background:{badge_bg};color:#ffffff;font-size:12px;font-weight:700;">{esc(action)} · {esc(action_cn)}</span>
-        <span style="display:inline-block;margin-left:8px;font-size:12px;color:#cbd5e1;">{esc(consensus_text)}</span>
+        <span style="display:inline-block;padding:4px 11px;border-radius:4px;background:{badge_bg};color:#ffffff;font-size:12px;font-weight:700;">总监拍板：{esc(action_cn)}</span>
+        <span style="display:inline-block;margin-left:8px;font-size:12px;color:#cbd5e1;">今日买点分：{composite_score}/100（{esc(score_zone_label)}）</span>
       </div>
     </div>
 
@@ -619,62 +791,88 @@ def render_email_html(
       <table style="width:100%;border-collapse:collapse;">
         <tr>
           <td style="width:34%;padding-right:10px;border-right:1px solid #e2e8f0;vertical-align:top;">
-            <div style="font-size:11px;color:#64748b;font-weight:600;">国内参考金价</div>
+            <div style="font-size:11px;color:#64748b;font-weight:600;">今日参考国内金价</div>
             <div style="font-size:20px;font-weight:800;color:#0f172a;margin-top:3px;">{esc(cny_price_str)}</div>
             <div style="font-size:11px;color:#64748b;margin-top:2px;">国际：{esc(xau_usd_short)}</div>
           </td>
-          <td style="width:36%;padding:0 12px;border-right:1px solid #e2e8f0;vertical-align:top;">
-            <div style="font-size:11px;color:#64748b;font-weight:600;">建议操作金额</div>
-            <div style="font-size:18px;font-weight:800;color:{badge_bg};margin-top:4px;">{esc(recommended_amount_short)}</div>
-            <div style="font-size:11px;color:#64748b;margin-top:2px;">按月度 {int(monthly_budget_cny):,} 元定投模型</div>
+          <td style="width:33%;padding:0 12px;border-right:1px solid #e2e8f0;vertical-align:top;">
+            <div style="font-size:11px;color:#64748b;font-weight:600;">今日入场性价比分</div>
+            <div style="font-size:22px;font-weight:800;color:{s_color};margin-top:2px;">{composite_score} <span style="font-size:12px;font-weight:600;color:#64748b;">/ 100</span></div>
+            <div style="font-size:11px;color:#64748b;margin-top:2px;">{esc(score_zone_label)}</div>
           </td>
-          <td style="width:30%;padding-left:12px;vertical-align:top;">
-            <div style="font-size:11px;color:#64748b;font-weight:600;">定投纪律参数</div>
-            <div style="font-size:15px;font-weight:700;color:#0f172a;margin-top:5px;">月预算 {int(monthly_budget_cny):,} 元</div>
-            <div style="font-size:11px;color:#64748b;margin-top:4px;">单笔起投 ≥ {int(min_single_buy_cny):,} 元</div>
+          <td style="width:33%;padding-left:12px;vertical-align:top;">
+            <div style="font-size:11px;color:#64748b;font-weight:600;">总监建议动作</div>
+            <div style="font-size:17px;font-weight:800;color:{badge_bg};margin-top:4px;">{esc(recommended_amount_short)}</div>
+            <div style="font-size:11px;color:#64748b;margin-top:3px;">模型：每月最多{max_shots_per_month}笔×{shot_amount_cny:,}元</div>
           </td>
         </tr>
       </table>
     </div>
 
-    <div style="padding:20px 24px 22px;">
+    <div style="margin:18px 24px 0;background:#fffbeb;border:1px solid #fde68a;border-left:4px solid #d97706;border-radius:6px;padding:11px 14px;font-size:13.5px;color:#78350f;line-height:1.6;">
+      <strong>💡 一句话看懂今天：</strong>{esc(plain_takeaway)}
+    </div>
+
+    <div style="padding:18px 24px 22px;">
       <div>
-        <div style="font-size:13px;font-weight:800;color:#0f172a;border-bottom:2px solid #0f172a;padding-bottom:5px;margin-bottom:8px;">01 ｜ 形势与走向速览</div>
+        <div style="font-size:13px;font-weight:800;color:#0f172a;border-bottom:2px solid #0f172a;padding-bottom:5px;margin-bottom:8px;">01 ｜ 3 颗子弹算法触发灯（每月最多 {max_shots_per_month} 次 × {shot_amount_cny:,} 元）</div>
+        <div style="font-size:12.5px;color:#334155;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;margin-bottom:8px;line-height:1.5;">
+          <strong>📊 K 线位置温度计：</strong>{esc(kline_thermometer_text)}
+        </div>
+        <table style="width:100%;border-collapse:collapse;table-layout:fixed;"><tr>{ladder_cells}</tr></table>
+      </div>
+
+      <div style="margin-top:18px;">
+        <div style="font-size:13px;font-weight:800;color:#0f172a;border-bottom:2px solid #0f172a;padding-bottom:5px;margin-bottom:8px;">02 ｜ 稳健做法 vs 大胆做法（按自己性格选）</div>
+        <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
+          <tr>
+            <td style="width:50%;padding:0 5px 0 0;vertical-align:top;">
+              <div style="background:#f8fafc;border:1px solid #cbd5e1;border-left:4px solid #475569;border-radius:6px;padding:10px 12px;font-size:13px;color:#1e293b;line-height:1.55;">
+                <div style="font-weight:800;color:#334155;margin-bottom:4px;">🛡️ 稳健做法</div>
+                {esc(steady_option)}
+              </div>
+            </td>
+            <td style="width:50%;padding:0 0 0 5px;vertical-align:top;">
+              <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #15803d;border-radius:6px;padding:10px 12px;font-size:13px;color:#14532d;line-height:1.55;">
+                <div style="font-weight:800;color:#166534;margin-bottom:4px;">🔥 大胆做法</div>
+                {esc(bold_option)}
+              </div>
+            </td>
+          </tr>
+        </table>
+      </div>
+
+      <div style="margin-top:18px;">
+        <div style="font-size:13px;font-weight:800;color:#0f172a;border-bottom:2px solid #0f172a;padding-bottom:5px;margin-bottom:10px;">03 ｜ 盯住这 4 个实用价格（单位：元 / 克）</div>
+        <table style="width:100%;border-collapse:collapse;table-layout:fixed;"><tr>{radar_cells}</tr></table>
+      </div>
+
+      <div style="margin-top:18px;">
+        <div style="font-size:13px;font-weight:800;color:#0f172a;border-bottom:2px solid #0f172a;padding-bottom:5px;margin-bottom:8px;">04 ｜ 现在黄金是什么行情？（人话版）</div>
         <table style="width:100%;border-collapse:collapse;"><tbody>{outlook_html}</tbody></table>
       </div>
 
       <div style="margin-top:18px;">
-        <div style="font-size:13px;font-weight:800;color:#0f172a;border-bottom:2px solid #0f172a;padding-bottom:5px;margin-bottom:10px;">02 ｜ 关键价位雷达（RMB / 克）</div>
-        <table style="width:100%;border-collapse:collapse;table-layout:fixed;"><tr>{radar_cells}</tr></table>
-      </div>
-
-      <div style="margin-top:20px;">
-        <div style="font-size:13px;font-weight:800;color:#0f172a;border-bottom:2px solid #0f172a;padding-bottom:5px;margin-bottom:6px;">03 ｜ 今日执行清单（月预算 {int(monthly_budget_cny):,} 元模型）</div>
-        <table style="width:100%;border-collapse:collapse;"><tbody>{actions_html}</tbody></table>
-      </div>
-
-      <div style="margin-top:20px;">
-        <div style="font-size:13px;font-weight:800;color:#0f172a;border-bottom:2px solid #0f172a;padding-bottom:5px;margin-bottom:8px;">04 ｜ 投委会表决矩阵</div>
+        <div style="font-size:13px;font-weight:800;color:#0f172a;border-bottom:2px solid #0f172a;padding-bottom:5px;margin-bottom:8px;">05 ｜ 5 位专业顾问各自最核心的 1 句话干货</div>
         <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
           <thead>
             <tr style="background:#f8fafc;color:#64748b;text-align:left;">
-              <th style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">委员</th>
-              <th style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">投票</th>
-              <th style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">信心</th>
-              <th style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">核心逻辑</th>
+              <th style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">专业角色</th>
+              <th style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">信号打分</th>
+              <th style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">最有价值的一句话</th>
             </tr>
           </thead>
-          <tbody>{c_rows}</tbody>
+          <tbody>{spec_html}</tbody>
         </table>
       </div>
 
-      <div style="margin-top:20px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 14px;">
-        <div style="font-size:12.5px;font-weight:800;color:#991b1b;margin-bottom:6px;">05 ｜ 关键风险提示</div>
+      <div style="margin-top:18px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 14px;">
+        <div style="font-size:12.5px;font-weight:800;color:#991b1b;margin-bottom:6px;">06 ｜ 近期最需要注意的 3 个风险</div>
         <ul style="margin:0;padding-left:18px;">{r_items}</ul>
       </div>
 
-      <div style="margin-top:20px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:11.5px;color:#64748b;line-height:1.55;">
-        <div>免责声明：本晨报由多 Agent 投研系统自动生成，统一基于「月度 {int(monthly_budget_cny):,} 元 / 单笔起投 {int(min_single_buy_cny):,} 元」标准模型测算，不含个人持仓信息，仅供投研参考，不构成持牌金融投资建议。</div>
+      <div style="margin-top:18px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:11.5px;color:#64748b;line-height:1.55;">
+        <div>免责声明：本晨报由多 Agent 量化投研系统自动整理，按「每月最多 {max_shots_per_month} 笔 × {shot_amount_cny:,} 元」通用算法模型测算，不含个人持仓或个人交易次数，仅供学习与决策参考，不构成持牌金融投资建议。</div>
       </div>
     </div>
   </div>
@@ -684,54 +882,65 @@ def render_email_html(
 
 
 # ==============================================================================
-# PHASE 1: PARALLEL INFORMATION COLLECTION
+# PHASE 0 & 1: REAL K-LINE FETCH + PARALLEL INFORMATION COLLECTION
 # ==============================================================================
 
-phase("Phase 1: 并发信息采集")
-log(f"启动黄金投委会 Workflow | Run ID: {RUN_ID} | 日期: {TODAY_STR}")
+phase("Phase 1: 真K线数据与并发信息采集")
+log(f"启动黄金投研算法 Workflow v3 | Run ID: {RUN_ID} | 日期: {TODAY_STR}")
+
+kline_data = fetch_kline_metrics()
+log(
+    f"K线量化模块状态: available={kline_data['available']} | "
+    + (
+        f"收盘折算={kline_data['latest_close_cny_g']} RMB/g, MA20={kline_data['ma20_cny']}, "
+        f"RSI14={kline_data['rsi14']}, 20日分位={kline_data['percentile_20d']}%, 客观K线分={kline_data['objective_kline_value_score']}"
+        if kline_data["available"]
+        else kline_data["note"]
+    )
+)
 
 collector_specs = [
     {
         "key": "market",
-        "role": "实时行情与汇率采集员",
-        "schema": MARKET_INTEL_SCHEMA,
+        "role": "实时行情与K线采集员",
+        "schema": MARKET_KLINE_INTEL_SCHEMA,
         "prompt": f"""{ISOLATION_GUARD}
-你是【实时行情与汇率采集员】。今天是 {TODAY_STR}（北京时间）。
-请使用 search_web 搜索今天（或最近一个交易日）最新的黄金与关联市场客观行情数据：
-1. 国际现货黄金（XAU/USD）价格与近期走势；
-2. 中国国内人民币黄金克价（上海黄金交易所 AU9999 / 沪金主力 / 银行积存金克价），请务必核实并以纯数字填入 cny_gold_price_per_gram（单位：人民币/克；若网页未给出精确数字可根据 XAU/USD 与 USD/CNY 换算并在 cny_gold_price_note 中明确注明“按国际金价与汇率折算”）；
-3. 美元兑人民币汇率（USD/CNY）、美元指数（DXY）、美国10年期国债收益率；
-4. 近1-2周金价波动特征。
-严格要求：只汇报客观事实与数据，标注来源与日期，不得编造数据，不要给出买卖建议。
+你是【实时行情与K线采集员】。今天是 {TODAY_STR}（北京时间）。
+请使用 search_web 搜索今天（或最近一个交易日）最新的黄金行情与 K 线技术面客观数据：
+1. 国际现货黄金（XAU/USD）价格与日内/隔夜涨跌幅（overnight_change_pct 纯数字）；
+2. 中国国内人民币黄金参考克价（上海黄金交易所 AU9999 / 沪金主力 / 银行积存金克价），纯数字填入 cny_gold_price_per_gram；
+3. USD/CNY 汇率、美元指数 DXY、美国10年期国债收益率；
+4. 近 30 个交易日国内黄金 K 线高低区间（kline_30d_range_cny）及当前均线/超买超卖等技术形态客观摘要（kline_technical_summary）。
+严格只汇报客观数据与来源，不做买卖建议。
 """,
     },
     {
         "key": "macro",
-        "role": "宏观与央行政策采集员",
-        "schema": MACRO_INTEL_SCHEMA,
+        "role": "宏观与行业基本面采集员",
+        "schema": MACRO_INDUSTRY_INTEL_SCHEMA,
         "prompt": f"""{ISOLATION_GUARD}
-你是【宏观与央行政策采集员】。今天是 {TODAY_STR}。
-请使用 search_web 搜索近期（过去2-4周及隔夜最新动态）影响黄金定价的宏观经济与央行政策新闻：
-1. 美联储（Fed）最新利率决议、官员表态、市场对未来降息/加息路径的预期；
-2. 美国最新通胀（CPI/PCE）、就业（非农）及经济数据；
-3. 中国央行（PBOC）及全球央行最新黄金储备增持/暂停动态；
-4. 重要财政政策、赤字、关税贸易政策或汇率政策新闻；
-5. 未来2-4周即将公布的关键宏观日历事件。
-严格要求：只输出有据可查的客观政策与新闻事实，标注来源和日期，不做主观交易建议。
+你是【宏观与行业基本面采集员】。今天是 {TODAY_STR}。
+请使用 search_web 搜索近期影响黄金走势的宏观经济、央行政策与黄金行业供需新闻：
+1. 美联储利率政策、官员表态与市场利率预期；
+2. 最新美国通胀、就业、经济数据；
+3. 中国央行（PBOC）及全球央行最新购金动态 + 黄金行业实物/金饰/工业供需动态；
+4. 财政赤字、关税或汇率政策新闻；
+5. 未来 2–4 周重要宏观日历事件。
+只输出客观事实与来源日期，不做交易建议。
 """,
     },
     {
-        "key": "geo",
-        "role": "地缘政治与市场情绪采集员",
-        "schema": GEO_INTEL_SCHEMA,
+        "key": "sentiment",
+        "role": "地缘情绪与机构资金采集员",
+        "schema": SENTIMENT_FLOWS_INTEL_SCHEMA,
         "prompt": f"""{ISOLATION_GUARD}
-你是【地缘政治与市场情绪采集员】。今天是 {TODAY_STR}。
-请使用 search_web 搜索近期影响黄金避险情绪与资金面的动态：
-1. 近期重大地缘政治局势与避险催化；
-2. 全球黄金 ETF（如 SPDR GLD）及中国国内黄金 ETF 资金流入/流出情况；
-3. 投行/主流机构（如高盛、瑞银、世界黄金协会等）近期对金价的最新观点或目标价调整；
-4. 市场拥挤度、散户/投机多头情绪是否过热或恐慌。
-严格要求：保持中立客观，所有事实标注来源和日期，不要输出买卖建议。
+你是【地缘情绪与机构资金采集员】。今天是 {TODAY_STR}。
+请使用 search_web 搜索近期地缘局势、机构资金流向与市场情绪动态：
+1. 重大地缘政治与避险事件；
+2. 全球黄金 ETF（SPDR GLD）与中国国内黄金 ETF 资金流入/流出；
+3. 主流投行（高盛、瑞银、世界黄金协会等）最新观点与目标价；
+4. 期货多空拥挤度与散户/机构情绪冷暖特征。
+保持中立客观并标注来源日期。
 """,
     },
 ]
@@ -741,243 +950,202 @@ collector_results_list = await parallel(
     lambda s: agent(s["prompt"], schema=s["schema"], role=s["role"], model="flash"),
 )
 intel = {collector_specs[i]["key"]: collector_results_list[i] for i in range(len(collector_specs))}
+cny_price = intel["market"].get("cny_gold_price_per_gram") or kline_data.get("latest_close_cny_g")
+overnight_chg = intel["market"].get("overnight_change_pct")
+if overnight_chg is None and kline_data.get("available"):
+    overnight_chg = kline_data.get("overnight_change_pct")
 
-cny_price = intel["market"].get("cny_gold_price_per_gram")
-portfolio_metrics = compute_portfolio_metrics(PORTFOLIO, cny_price, TODAY_STR)
 log(
-    f"Phase 1 完成 | 国际金价: {intel['market']['xau_usd_price']} | "
-    f"国内参考克价: {cny_price} RMB/g | 情绪: {intel['geo']['market_sentiment_label']}"
+    f"Phase 1 完成 | 国内参考克价: {cny_price} RMB/g | 国际: {intel['market']['xau_usd_price'][:40]} | "
+    f"情绪: {intel['sentiment']['market_sentiment_label']}"
 )
 
-intel_bundle_json = json.dumps(intel, ensure_ascii=False, indent=2)
-portfolio_metrics_json = json.dumps(portfolio_metrics, ensure_ascii=False, indent=2)
-portfolio_raw_json = json.dumps(PORTFOLIO, ensure_ascii=False, indent=2)
-
-# ==============================================================================
-# PHASE 2: PARALLEL MULTI-DIMENSIONAL ANALYSIS
-# ==============================================================================
-
-phase("Phase 2: 多维专业分析")
-
-analyst_specs = [
-    {
-        "key": "policy",
-        "role": "政策与宏观基本面分析师",
-        "model": "inherit",
-        "schema": POLICY_ANALYSIS_SCHEMA,
-        "prompt": f"""{ISOLATION_GUARD}
-你是【政策与宏观基本面分析师】。今天是 {TODAY_STR}。
-请严格基于下方 Phase 1 采集到的最新客观情报，进行深度政策与宏观基本面拆解：
-1. 判断当前黄金所处的宏观定价范式；
-2. 分别列举最核心的利多驱动与利空压制/风险点；
-3. 区分“短期情绪噪音”与“中期决定方向的真主线”；
-4. 给出整体基本面偏向判断，并撰写中文分析正文（analysis_markdown）。
-
-【Phase 1 客观情报包】
-{intel_bundle_json}
-""",
-    },
-    {
-        "key": "trend",
-        "role": "短线波段与长线趋势分析师",
-        "model": "inherit",
-        "schema": TREND_ANALYSIS_SCHEMA,
-        "prompt": f"""{ISOLATION_GUARD}
-你是【短线波段与长线趋势分析师】。今天是 {TODAY_STR}。
-用户明确表示：**同时接受短线波段操作与长线配置，且允许止盈减仓**。
-请严格基于下方客观情报，同时从“短线（1–4周）”和“长线（3–12个月）”两个维度分析金价走向，给出国内人民币金价（RMB/克）的关键支撑位与阻力/止盈区间、多情景概率及中文正文（analysis_markdown）。
-
-【Phase 1 客观情报包】
-{intel_bundle_json}
-""",
-    },
-    {
-        "key": "portfolio",
-        "role": "个人持仓与仓位管理分析师",
-        "model": "flash",
-        "schema": PORTFOLIO_ANALYSIS_SCHEMA,
-        "prompt": f"""{ISOLATION_GUARD}
-你是【个人持仓与仓位管理分析师】。今天是 {TODAY_STR}。
-请结合用户的真实账户配置、已算好的定量指标和最新行情，做严谨的资金管理与仓位评估：
-1. 评估用户当前持仓健康度与安全垫；
-2. 严格遵守**单笔最低买入金额 min_single_buy_cny（{portfolio_metrics['min_single_buy_cny']} 元）**与**本月剩余可用预算 remaining_budget_this_month_cny（{portfolio_metrics['remaining_budget_this_month_cny']} 元）**，对比可执行加仓方案与减仓 20%/30%/50% 方案；
-3. 提出风控护栏建议并撰写包含清晰表格的中文正文（analysis_markdown）。
-
-【用户账户配置】
-{portfolio_raw_json}
-
-【定量持仓与加减仓测算结果】
-{portfolio_metrics_json}
-
-【实时行情摘要】
-{json.dumps(intel["market"], ensure_ascii=False, indent=2)}
-""",
-    },
-]
-
-analyst_results_list = await parallel(
-    analyst_specs,
-    lambda s: agent(s["prompt"], schema=s["schema"], role=s["role"], model=s["model"]),
-)
-analysis = {analyst_specs[i]["key"]: analyst_results_list[i] for i in range(len(analyst_specs))}
-log(
-    f"Phase 2 完成 | 基本面: {analysis['policy']['fundamental_bias']} | "
-    f"短线: {analysis['trend']['short_term_view']} | 长线: {analysis['trend']['long_term_view']}"
-)
-
-briefing_pack = json.dumps(
+objective_data_bundle = json.dumps(
     {
         "date": TODAY_STR,
-        "portfolio": PORTFOLIO,
-        "portfolio_metrics": portfolio_metrics,
-        "market_intel": intel["market"],
-        "policy_analysis": {k: v for k, v in analysis["policy"].items() if k != "analysis_markdown"},
-        "trend_analysis": {k: v for k, v in analysis["trend"].items() if k != "analysis_markdown"},
-        "portfolio_analysis": {k: v for k, v in analysis["portfolio"].items() if k != "analysis_markdown"},
-        "upcoming_key_events": intel["macro"]["upcoming_key_events"],
-        "market_sentiment": intel["geo"]["market_sentiment_label"],
-        "crowded_trade_signals": intel["geo"]["crowded_trade_signals"],
+        "cny_gold_price_per_gram": cny_price,
+        "quant_kline_metrics": kline_data,
+        "market_kline_intel": intel["market"],
+        "macro_industry_intel": intel["macro"],
+        "sentiment_flows_intel": intel["sentiment"],
     },
     ensure_ascii=False,
     indent=2,
 )
 
 # ==============================================================================
-# PHASE 3: 2-ROUND HETEROGENEOUS INVESTMENT COMMITTEE VOTING & DEBATE
+# PHASE 2: 5 INDEPENDENT SPECIALISTS (PARALLEL, DECOUPLED FROM USER WALLET!)
 # ==============================================================================
 
-phase("Phase 3: 投委会两轮讨论与投票会议")
+phase("Phase 2: 5位专家独立供弹与客观打分")
 
-committee_defs = [
+specialist_specs = [
     {
-        "id": "trend_swing",
-        "name": "委员A · 趋势波段委员",
-        "standing": f"""{ISOLATION_GUARD}
-你是黄金投委会【委员A · 趋势波段委员】。
-核心投资哲学：重视动量、波段赔率、事件催化与右侧顺势；强支撑或突破初期敢于出击，超买/阻力位敢于主张短线部分止盈。坚守角色，不迎合他人。""",
+        "key": "macro",
+        "role": "① 宏观与行业专家",
+        "schema": SPECIALIST_MACRO_SCHEMA,
+        "prompt": f"""{ISOLATION_GUARD}
+你是顶级投行投研组的【① 宏观与行业专家】。今天是 {TODAY_STR}。
+【核心要求】不要考虑任何个人钱包或预算限制，只纯粹从宏观经济、央行购金、利率汇率与黄金行业供需出发，给出客观、锋利的判断：
+1. 打出 `score_0_to_100`（50=中性，65+=宏观行业支持逢低买入，80+=强顺风，35以下=显著逆风过热）；
+2. 用普通人秒懂的大白话提炼 1 句最有价值的核心信号（`sharpest_signal_plain`，≤ 26 字，禁用英文缩写）；
+3. 列出核心利多/利空并写清分析正文（analysis_markdown）。
+
+【今日客观行情、K线与情报包】
+{objective_data_bundle}
+""",
     },
     {
-        "id": "long_term",
-        "name": "委员B · 长线配置委员",
-        "standing": f"""{ISOLATION_GUARD}
-你是黄金投委会【委员B · 长线配置委员】。
-核心投资哲学：重视 6 个月至数年宏观大周期、央行购金底盘、信用货币对冲与纪律性分批积累；厌恶追涨杀跌，长线逻辑破坏或严重透支时认可再平衡。""",
+        "key": "kline",
+        "role": "② K线与短线波段专家",
+        "schema": SPECIALIST_KLINE_SCHEMA,
+        "prompt": f"""{ISOLATION_GUARD}
+你是顶级投行投研组的【② K线与短线波段专家】。今天是 {TODAY_STR}。
+【核心要求】完全独立于个人钱包，严格基于日 K 线价格区间、均线、波动与超买超卖状态做客观技术评估：
+1. 打出 `score_0_to_100`（当前位置买入的短线性价比：价格处于近30日低位企稳/超跌则给高分 68–88；半山腰震荡给 45–62；高位超买给 20–38）；
+2. 给出 `estimated_30d_percentile`（0=近30天最便宜，100=近30天最贵）；
+3. 给出 **白天上班族真实能买得到的实用区间**（不要只画半夜瞬间插针买不到的纸面最低价！）：
+   - `realistic_dip_buy_zone_cny`（温和回踩即可成交的实用买点区间，如 `748–758`）
+   - `defense_break_line_cny`（有效跌破则停买观望的防守线，**必须低于加仓区下沿至少 15 元以上**，绝不重叠！）
+   - `short_tp_zone_cny`（短线波段止盈区间）
+4. 用大白话提炼 1 句核心信号（`sharpest_signal_plain`，≤ 26 字，禁用英文缩写）。
+
+【今日客观行情、K线与情报包】
+{objective_data_bundle}
+""",
     },
     {
-        "id": "risk_redteam",
-        "name": "委员C · 逆向风控委员 (Red Team)",
-        "standing": f"""{ISOLATION_GUARD}
-你是黄金投委会【委员C · 逆向风控委员（红军/挑刺者）】。
-职责是专门审视市场盲点、多头拥挤度、汇率反向波动、短期回调回撤和重大数据公布前的事件风险。
-只有当存在显著追高/大幅回撤/高危事件风险、绝不适合全额激进买入时，才将 risk_veto 设为 true 并给出充分依据。""",
+        "key": "long_term",
+        "role": "③ 长线价值定投派",
+        "schema": SPECIALIST_LONGTERM_SCHEMA,
+        "prompt": f"""{ISOLATION_GUARD}
+你是顶级投行投研组的【③ 长线价值定投派】。今天是 {TODAY_STR}。
+【核心要求】专注 3–12 个月大周期估值与定投性价比。你的职责是防止投资人因为死等一个“永远不来的完美最低点”而错失长期建仓窗口！
+1. 打出 `score_0_to_100`（只要大逻辑未破、价格已较前期高点显著回调进入合理积累区，就应诚实给出 65–85 分，不要因为下周有短期宏观数据就偷懒给低分！如果已泡沫过热再给低分）；
+2. 给出长线大赚后的分批止盈区间 `long_tp_zone_cny`；
+3. 用大白话提炼 1 句核心信号（`sharpest_signal_plain`，≤ 26 字，禁用英文缩写）。
+
+【今日客观行情、K线与情报包】
+{objective_data_bundle}
+""",
     },
     {
-        "id": "portfolio_cfo",
-        "name": "委员D · 个人财务与仓位官",
-        "standing": f"""{ISOLATION_GUARD}
-你是黄金投委会【委员D · 个人财务与仓位官】。
-你只忠于用户的真实财务约束：单笔最低买入门槛 {portfolio_metrics['min_single_buy_cny']} RMB，本月剩余可用预算 {portfolio_metrics['remaining_budget_this_month_cny']} RMB（月总预算 {portfolio_metrics['monthly_budget_cny']} RMB），严禁建议低于最低起投额或超出本月剩余预算的买入金额。""",
+        "key": "aggressive",
+        "role": "④ 激进机会派（进攻前锋）",
+        "schema": SPECIALIST_AGGRESSIVE_SCHEMA,
+        "prompt": f"""{ISOLATION_GUARD}
+你是顶级投行投研组的【④ 激进机会派（进攻前锋）】。今天是 {TODAY_STR}。
+【核心使命】你是整个投研组专门负责**挖掘高收益进攻机会与评估踏空代价**的锋线专家！
+- **绝对禁止拿“下周有数据/再等等更安全”当借口躺平**！
+- 请尖锐地评估：当前市场恐慌/回调/反弹结构里，是否存在值得大胆出击的买点（或高抛做差价机会）？如果今天不出手，未来 2 周踏空的代价有多大？
+1. 给出客观的 `score_0_to_100`（进攻吸引力：只要存在明显错杀、反弹动能或高赔率回调就敢给 68–90；只有真正严重过热追高无肉吃才给低分）；
+2. 用大白话给出 `bold_proposal_plain`（≤ 38 字，如“盘中回踩 758 下方可先买一笔 1,200 元，弹到 805 做波段”）；
+3. 写清 `cost_of_waiting_plain`（继续死等可能错过的机会）及 1 句核心信号 `sharpest_signal_plain`（≤ 26 字，禁用英文缩写）。
+
+【今日客观行情、K线与情报包】
+{objective_data_bundle}
+""",
+    },
+    {
+        "key": "risk",
+        "role": "⑤ 保守风控派（红队盾牌）",
+        "schema": SPECIALIST_RISK_SCHEMA,
+        "prompt": f"""{ISOLATION_GUARD}
+你是顶级投行投研组的【⑤ 保守风控派（红队盾牌）】。今天是 {TODAY_STR}。
+【核心使命】你的职责是**客观量化真实下行风险与追高陷阱**，给投资总监提供安全带，但不要为了免责动不动把风险拉满！
+1. 给出 `risk_deduction_0_to_20`（风险扣分，0–20 分）：
+   - `0–5`：风险低，回调充分、安全边际高；
+   - `6–12`：中等常规波动风险（如普通数据日、常规震荡）；
+   - `13–20`：高危陷阱（如明显高位追涨过热、大机构疯狂抛售叠加重大黑天鹅、银行加价离谱）。
+2. 用大白话给出 `steady_proposal_plain`（≤ 38 字，稳健投资人今天该怎么执行）；
+3. 用大白话列出最值得警惕的 3 个风险 `top_3_risks`（每条 `tag` 4–6字 + `desc` ≤ 34字，禁用 `PCE/CPI/FOMC/ETF/ATR/DXY` 等英文缩写！）及 1 句核心信号 `sharpest_signal_plain`（≤ 26 字）。
+
+【今日客观行情、K线与情报包】
+{objective_data_bundle}
+""",
     },
 ]
 
-committee_members = [
-    {
-        "id": c["id"],
-        "name": c["name"],
-        "agent": agent(c["standing"], role=c["name"], model="inherit"),
-    }
-    for c in committee_defs
-]
-
-round1_prompt = f"""现在开始【第 1 轮：独立盲评与初投】。
-请仔细阅读投研简报，独立给出投票（可选动作：{ALLOWED_ACTIONS}）及 1 个想质询其他委员的核心问题。
-注意硬性约束：平台单笔最低买入金额为 **{portfolio_metrics['min_single_buy_cny']} RMB**，本月剩余可用预算为 **{portfolio_metrics['remaining_budget_this_month_cny']} RMB**。若建议买入，金额必须 ≥ {portfolio_metrics['min_single_buy_cny']} 且 ≤ {portfolio_metrics['remaining_budget_this_month_cny']}（若本月剩余预算不足起投额，则只能选 HOLD 或止盈减仓）。
-
-【投研与持仓简报】
-{briefing_pack}
-"""
-
-log("投委会 Round 1（独立初评）开始...")
-round1_votes_list = await parallel(
-    committee_members,
-    lambda m: m["agent"](round1_prompt, ROUND1_VOTE_SCHEMA),
+specialist_results = await parallel(
+    specialist_specs,
+    lambda s: agent(s["prompt"], schema=s["schema"], role=s["role"], model="inherit"),
 )
-round1_records = [
-    {"id": committee_members[i]["id"], "name": committee_members[i]["name"], "vote": round1_votes_list[i]}
-    for i in range(len(committee_members))
-]
+specialists = {specialist_specs[i]["key"]: specialist_results[i] for i in range(len(specialist_specs))}
+
+# ==============================================================================
+# PHASE 3: DETERMINISTIC QUANT SCORE & 3-BULLET OPTIMAL STOPPING ENGINE
+# ==============================================================================
+
+phase("Phase 3: 量化得分合成与 3 颗子弹算法计算")
+
+quant = compute_quant_and_bullets(
+    portfolio=PORTFOLIO,
+    cny_price=cny_price,
+    overnight_chg=overnight_chg,
+    today_str=TODAY_STR,
+    kline_data=kline_data,
+    specialists=specialists,
+)
 log(
-    "Round 1 结果: "
-    + ", ".join(f"{r['name']}={r['vote']['action']}({r['vote']['confidence_1_to_10']}/10)" for r in round1_records)
-)
-
-round1_summary_for_debate = json.dumps(round1_records, ensure_ascii=False, indent=2)
-
-
-def build_round2_prompt(member_name: str) -> str:
-    return f"""现在进入【第 2 轮：交叉质询、辩论与最终表决】。
-以下是全部 4 位委员（包括你自己：{member_name}）在 Round 1 的独立意见和质询问题：
-
-{round1_summary_for_debate}
-
-请直面回应与你意见分歧最大的委员或回答他们的问题，冷静评估是否维持或修正投票（changed_mind），投出最终正式票并明确给出合规金额（买入须 ≥ {portfolio_metrics['min_single_buy_cny']} RMB 且 ≤ {portfolio_metrics['remaining_budget_this_month_cny']} RMB）/减仓比例及触发条件。
-"""
-
-
-log("投委会 Round 2（交叉辩论与终投）开始...")
-round2_votes_list = await parallel(
-    committee_members,
-    lambda m: m["agent"](build_round2_prompt(m["name"]), ROUND2_VOTE_SCHEMA),
-)
-round2_records = [
-    {"id": committee_members[i]["id"], "name": committee_members[i]["name"], "vote": round2_votes_list[i]}
-    for i in range(len(committee_members))
-]
-
-tally = resolve_committee_vote(round2_records)
-log(
-    f"Round 2 终投结果: {tally['vote_counts']} -> 最终决议: {tally['final_action']} "
-    f"| 平均信心: {tally['avg_confidence']}/10 | 风控预警: {tally['risk_veto_triggered']}"
+    f"量化合成完成 | 综合买点分: {quant['composite_score']}/100 ({quant['score_zone_label']}) | "
+    f"通用算法信号: {quant['universal_signal']} | "
+    f"个人信号(本月剩余{quant['personal_state']['remaining_shots']}颗): {quant['personal_state']['personal_signal']}"
 )
 
 # ==============================================================================
-# PHASE 4: SECRETARY SYNTHESIS & ARCHIVE PERSISTENCE
+# PHASE 4: 1 CHIEF PORTFOLIO MANAGER (PM) FINAL DECISION & ARCHIVE
 # ==============================================================================
 
-phase("Phase 4: 会议秘书归档与决策单生成")
+phase("Phase 4: 投资总监(PM)唯一拍板与大白话晨报生成")
 
-secretary_prompt = f"""{ISOLATION_GUARD}
-你是【高盛/瑞银投行晨会风格的黄金投委会会议秘书】。今天是 {TODAY_STR}。
-请基于本次会议的行情、两轮辩论记录及最终计票决议，输出一份**极致精炼、30秒扫完、结构化分明**的投行晨报 JSON。
+pm_briefing = json.dumps(
+    {
+        "date": TODAY_STR,
+        "cny_gold_price_per_gram": cny_price,
+        "xau_usd": intel["market"]["xau_usd_price"],
+        "quant_kline_metrics": kline_data,
+        "quant_algorithm_result": quant,
+        "specialists_summary": {
+            "macro": {k: v for k, v in specialists["macro"].items() if k != "analysis_markdown"},
+            "kline": {k: v for k, v in specialists["kline"].items() if k != "analysis_markdown"},
+            "long_term": {k: v for k, v in specialists["long_term"].items() if k != "analysis_markdown"},
+            "aggressive": {k: v for k, v in specialists["aggressive"].items() if k != "analysis_markdown"},
+            "risk": {k: v for k, v in specialists["risk"].items() if k != "analysis_markdown"},
+        },
+    },
+    ensure_ascii=False,
+    indent=2,
+)
 
-【最高铁律 — 违反即不合格】
-1. **严格隐私脱敏**：所有字段（含 decision_markdown 之外的全部邮件字段）**严禁出现任何个人真实持仓金额、本金、均价（如 840.31）、克数或账面浮亏/浮盈数字**！统一按「月度 3,000 元定投预算（单笔起投 1,200 元）」表述。
-2. **投行级极简字数控制（严禁长段废话）**：
-   - `headline`：≤ 22 字，直给核心结论（例：`PCE偏热金价破3500，今日观望等725–745低吸`）
-   - `recommended_amount_short`：极短数字标签（例：`0 元 · 暂缓加仓` / `1,200 元 · 逢低分批`）
-   - `macro_one_liner` / `short_term_one_liner` / `long_term_one_liner`：每条严格 **20–35 字**，只讲核心因果与数字！
-   - `radar_dip_buy` / `radar_defense` / `radar_short_tp` / `radar_long_tp`：`price_range` 写纯数字区间（如 `725–745`），`note` 严格 **≤ 12 字**！
-   - `action_steps`：**恰好 3 条**，每条 `label`（4–6 字）+ `text`（**≤ 36 字**，直接写触发条件与金额）！
-   - `committee_one_liners`：**恰好 4 条**，对应 4 位委员（简称：`趋势波段` / `长线配置` / `逆向风控` / `财务仓位`），`logic` 严格 **≤ 22 字**！
-   - `risk_items`：**恰好 3 条**，每条 `tag`（4–6 字）+ `desc`（**≤ 34 字**）！
-3. 严格尊重最终计票决议（{tally['final_action']} - {tally['final_action_label']}）与裁定说明（{tally['resolution_rule']}）。
+pm_prompt = f"""{ISOLATION_GUARD}
+你是顶级多策略基金的【唯一拍板官：首席投资总监（Chief Portfolio Manager）】。今天是 {TODAY_STR}。
+下面 5 位专业顾问已经各自独立提交了最锋利的情报和打分，Python 算法引擎也已经算出了**今日入场性价比综合分（{quant['composite_score']}/100）**和**3 颗子弹（每次 1,200 元，每月最多 3 次）动态门槛结果**。
 
-【最终计票与规则裁定】
-{json.dumps(tally, ensure_ascii=False, indent=2)}
+现在由你做**最终唯一拍板**，同时生成两套严格区分受众的输出：
+- **对外共享邮件字段**（`universal_action`, `headline`, `plain_takeaway`, `recommended_amount_short`, `kline_thermometer_plain`, `steady_option_plain`, `bold_option_plain`, `macro_one_liner`, `short_term_one_liner`, `long_term_one_liner`, `radar_*`, `specialist_email_lines`, `risk_items`, `public_decision_markdown`）：
+  1. **严格隐私脱敏**：绝不允许出现任何个人持仓金额、个人均价（如 840.31）、个人克数、个人浮亏，**也不要暴露“你这个月已经用了几颗子弹”**！只按「通用每月最多 3 笔 × 1,200 元（第 1 颗 ≥ 65 分 / 第 2 颗 ≥ 72 分 / 第 3 颗 ≥ 80 分）」和客观综合分（{quant['composite_score']} 分）给出清晰结论。
+  2. **彻底大白话，禁用金融黑话与英文缩写**：绝对禁止出现 `PCE`、`CPI`、`GDP`、`FOMC`、`ATR`、`DXY`、`ETF`、`RSI`、`MA20`、`赔率`、`收破`、`滞涨`、`去杠杆`、`右侧`、`左侧`、`点阵图` 等词！全部用普通人 20 秒秒懂的大白话表达（比如把 RSI/分位翻译成“当前价格处于近一个月偏低位置，比过去 30 天里大多数日子便宜”）。
+  3. **稳胆平衡，不偏不倚**：`universal_action` 严格尊重通用算法信号（`{quant['universal_signal']}`）；同时在 `steady_option_plain`（≤ 44字）和 `bold_option_plain`（≤ 44字）里分别把「稳健做法」和「大胆做法」的实用白天价位说清楚！
+  4. **4 个价位卡必须清晰分开不重叠**：`radar_defense` 必须严格低于 `radar_dip_buy` 下沿至少 15 元以上；`note` 每条 ≤ 12 字。
+  5. `specialist_email_lines` 恰好 5 条，对应 5 位专家（`宏观与行业` / `K线短线派` / `长线定投派` / `激进机会派` / `保守风控派`），`score_badge` 写如 `72分` 或 `扣10分`，`signal` ≤ 26 字大白话。
+  6. `risk_items` 恰好 3 条大白话。
+- **本地私密记录字段**（`personal_action`, `personal_private_note_markdown`）：
+  - 仅写入用户本机档案 `04_decision.md`，这里可以结合用户的真实本月子弹进度（`personal_state`：本月已用 {quant['personal_state']['shots_used']}/3 颗、剩余 {quant['personal_state']['remaining_shots']} 颗、下次是第 {quant['personal_state']['next_shot_number']} 颗门槛 {quant['personal_state']['active_threshold']} 分，下月 1 日自动重置为 0/3 颗）给出精准个人执行备忘！
 
-【市场形势与趋势摘要】
-{json.dumps({"policy": {k: v for k, v in analysis["policy"].items() if k != "analysis_markdown"}, "trend": {k: v for k, v in analysis["trend"].items() if k != "analysis_markdown"}}, ensure_ascii=False, indent=2)}
-
-【Round 2 终投记录】
-{json.dumps(round2_records, ensure_ascii=False, indent=2)}
+【5 专家汇总 + 量化算法状态包】
+{pm_briefing}
 """
 
-decision = await agent(
-    secretary_prompt,
-    schema=DECISION_SYNTHESIS_SCHEMA,
-    role="投委会会议秘书",
-    model="flash",
+pm_decision = await agent(
+    pm_prompt,
+    schema=PM_FINAL_DECISION_SCHEMA,
+    role="首席投资总监 (PM · 唯一拍板)",
+    model="inherit",
 )
+
+# ------------------------------------------------------------------------------
+# Render Archives & Privacy-Safe v3 Morning Note HTML
+# ------------------------------------------------------------------------------
 
 
 def format_sources(sources: list[dict]) -> str:
@@ -988,223 +1156,186 @@ def format_sources(sources: list[dict]) -> str:
     )
 
 
+ps = quant["personal_state"]
 pnl_str = (
-    f"{portfolio_metrics['unrealized_pnl_cny']:+.2f} RMB ({portfolio_metrics['unrealized_pnl_pct']:+.2f}%)"
-    if "unrealized_pnl_cny" in portfolio_metrics
+    f"{ps['unrealized_pnl_cny']:+.2f} RMB ({ps['unrealized_pnl_pct']:+.2f}%)"
+    if ps["unrealized_pnl_cny"] is not None
     else "N/A"
 )
 
-md_intel = f"""# 01 黄金投研客观情报档案（{RUN_ID}）
+md_intel = f"""# 01 黄金投研客观情报与 K 线档案（{RUN_ID}）
 
 - **采集日期**：{TODAY_STR}
 - **行情基准时间**：{intel['market']['as_of_date']}
+- **国内参考克价**：**{cny_price if cny_price is not None else '待核实'} RMB/克**（{intel['market']['cny_gold_price_note']}）
+- **国际现货金价**：{intel['market']['xau_usd_price']}
+- **USD/CNY**：{intel['market']['usd_cny_rate']} ｜ **DXY**：{intel['market']['dxy_index']} ｜ **美债10Y**：{intel['market']['us10y_yield']}
 
-## 一、实时行情与关联指标
+## 一、K 线量化指标快照
+```json
+{json.dumps(kline_data, ensure_ascii=False, indent=2)}
+```
+- **近 30 日国内区间**：{intel['market']['kline_30d_range_cny']}
+- **技术面客观摘要**：{intel['market']['kline_technical_summary']}
 
-| 指标 | 最新读数 / 说明 |
-| --- | --- |
-| 国际现货黄金 (XAU/USD) | {intel['market']['xau_usd_price']} |
-| 国内参考人民币克价 | **{cny_price if cny_price is not None else '待核实'} RMB/克**（{intel['market']['cny_gold_price_note']}） |
-| 美元兑人民币 (USD/CNY) | {intel['market']['usd_cny_rate']} |
-| 美元指数 (DXY) | {intel['market']['dxy_index']} |
-| 美债 10 年期收益率 | {intel['market']['us10y_yield']} |
-
-**近期走势特征**：{intel['market']['recent_price_action_summary']}
-
-### 行情信息来源
+### 行情来源
 {format_sources(intel['market']['sources'])}
 
 ---
 
-## 二、宏观经济与央行政策动态
-- **美联储政策与预期**：{intel['macro']['fed_policy_summary']}
-- **美国核心宏观数据**：{intel['macro']['us_macro_data_summary']}
-- **中国央行及全球央行购金**：{intel['macro']['pboc_and_central_banks_summary']}
-- **财政与关税/贸易政策**：{intel['macro']['fiscal_and_tariff_policy_summary']}
+## 二、宏观经济与黄金行业基本面
+- **美联储与利率**：{intel['macro']['fed_and_rates_summary']}
+- **美国核心数据**：{intel['macro']['us_macro_data_summary']}
+- **央行购金与行业供需**：{intel['macro']['central_banks_and_industry_demand']}
+- **财政与汇率政策**：{intel['macro']['fiscal_fx_policy_summary']}
 
-### 未来关键事件日历
+### 关键事件日历
 """ + "\n".join(f"- {e}" for e in intel["macro"]["upcoming_key_events"]) + f"""
 
-### 宏观政策来源
+### 宏观来源
 {format_sources(intel['macro']['sources'])}
 
 ---
 
-## 三、地缘政治、资金流与市场情绪
-- **市场情绪标签**：`{intel['geo']['market_sentiment_label']}`
-- **地缘政治与避险催化**：{intel['geo']['geopolitics_summary']}
-- **ETF 与资金流向**：{intel['geo']['etf_and_capital_flows_summary']}
-- **主流机构观点**：{intel['geo']['institution_views_summary']}
-- **交易拥挤度信号**：{intel['geo']['crowded_trade_signals']}
+## 三、地缘政治、机构资金流与情绪
+- **情绪标签**：`{intel['sentiment']['market_sentiment_label']}`
+- **地缘局势**：{intel['sentiment']['geopolitics_summary']}
+- **ETF 与机构资金流**：{intel['sentiment']['etf_and_institution_flows']}
+- **主流投行观点**：{intel['sentiment']['institution_views_summary']}
+- **拥挤度信号**：{intel['sentiment']['crowded_trade_signals']}
 
-### 地缘与情绪来源
-{format_sources(intel['geo']['sources'])}
+### 情绪来源
+{format_sources(intel['sentiment']['sources'])}
 """
 
-md_analysis = f"""# 02 多维专业分析报告（{RUN_ID}）
+md_specialists = f"""# 02 五位专业顾问独立研判与量化打分（{RUN_ID}）
 
-## 一、政策与宏观基本面分析
-- **宏观定价范式**：{analysis['policy']['macro_regime']}
-- **基本面综合偏向**：`{analysis['policy']['fundamental_bias']}`
-- **噪音 vs 主线**：{analysis['policy']['noise_vs_signal']}
-
-**核心利多驱动**：
-""" + "\n".join(f"- {x}" for x in analysis["policy"]["bullish_drivers"]) + """
-
-**核心利空与压制**：
-""" + "\n".join(f"- {x}" for x in analysis["policy"]["bearish_drivers"]) + f"""
-
-{analysis['policy']['analysis_markdown']}
+## 量化得分总览
+- **今日综合入场性价比分**：**{quant['composite_score']} / 100**（{quant['score_zone_label']}）
+- **因子明细**：`{json.dumps(quant['score_breakdown'], ensure_ascii=False)}`
 
 ---
 
-## 二、短线波段与长线趋势走向分析
-- **短线视角（1–4 周）**：`{analysis['trend']['short_term_view']}` — {analysis['trend']['short_term_horizon_1_4w']}
-- **长线视角（3–12 个月）**：`{analysis['trend']['long_term_view']}` — {analysis['trend']['long_term_horizon_3_12m']}
-- **国内金价关键支撑位**：{', '.join(analysis['trend']['key_support_levels_cny_g'])}
-- **国内金价关键阻力/止盈位**：{', '.join(analysis['trend']['key_resistance_levels_cny_g'])}
-- **情景概览**：{analysis['trend']['scenario_summary']}
-
-{analysis['trend']['analysis_markdown']}
+## ① 宏观与行业专家（{specialists['macro']['score_0_to_100']} / 100）
+- **一句话信号**：{specialists['macro']['sharpest_signal_plain']}
+{specialists['macro']['analysis_markdown']}
 
 ---
 
-## 三、个人持仓与仓位管理分析
-- **持仓健康度评估**：{analysis['portfolio']['position_health_assessment']}
-- **加仓方案对比**：{analysis['portfolio']['buy_scenarios_summary']}
-- **止盈/减仓方案对比**：{analysis['portfolio']['take_profit_scenarios_summary']}
+## ② K 线与短线波段专家（{specialists['kline']['score_0_to_100']} / 100）
+- **一句话信号**：{specialists['kline']['sharpest_signal_plain']}
+- **实用买点**：{specialists['kline']['realistic_dip_buy_zone_cny']} ｜ **防守线**：{specialists['kline']['defense_break_line_cny']} ｜ **短线止盈**：{specialists['kline']['short_tp_zone_cny']}
+{specialists['kline']['analysis_markdown']}
 
-**风控护栏建议**：
-""" + "\n".join(f"- {x}" for x in analysis["portfolio"]["risk_guardrails"]) + f"""
+---
 
-{analysis['portfolio']['analysis_markdown']}
+## ③ 长线价值定投派（{specialists['long_term']['score_0_to_100']} / 100）
+- **一句话信号**：{specialists['long_term']['sharpest_signal_plain']}
+- **长线止盈目标**：{specialists['long_term']['long_tp_zone_cny']}
+{specialists['long_term']['analysis_markdown']}
+
+---
+
+## ④ 激进机会派（{specialists['aggressive']['score_0_to_100']} / 100）
+- **一句话信号**：{specialists['aggressive']['sharpest_signal_plain']}
+- **大胆建议**：{specialists['aggressive']['bold_proposal_plain']}
+- **踏空代价评估**：{specialists['aggressive']['cost_of_waiting_plain']}
+{specialists['aggressive']['analysis_markdown']}
+
+---
+
+## ⑤ 保守风控派（风险扣分 -{specialists['risk']['risk_deduction_0_to_20']} / 20）
+- **一句话信号**：{specialists['risk']['sharpest_signal_plain']}
+- **稳健建议**：{specialists['risk']['steady_proposal_plain']}
+{specialists['risk']['analysis_markdown']}
 """
 
-r1_blocks = "".join(
-    f"### {r['name']}\n"
-    f"- **初投动作**：`{r['vote']['action']}`（{r['vote']['recommended_amount_desc']}） | **信心分**：{r['vote']['confidence_1_to_10']}/10 | **风控预警**：`{r['vote']['risk_veto']}`\n"
-    f"- **短线观点**：{r['vote']['short_term_stance']}\n"
-    f"- **长线观点**：{r['vote']['long_term_stance']}\n"
-    f"- **核心论据**：{r['vote']['core_rationale']}\n"
-    f"- **风控预警说明**：{r['vote']['risk_veto_reason']}\n"
-    f"- **向委员会提出的质询问题**：{r['vote']['question_for_committee']}\n\n"
-    for r in round1_records
-)
-r2_blocks = "".join(
-    f"### {r['name']}\n"
-    f"- **最终投票**：`{r['vote']['action']}`（{r['vote']['recommended_amount_desc']}） | **是否改票**：`{r['vote']['changed_mind']}` | **信心分**：{r['vote']['confidence_1_to_10']}/10 | **风控预警**：`{r['vote']['risk_veto']}`\n"
-    f"- **回应质疑与交锋**：{r['vote']['response_to_peers']}\n"
-    f"- **触发条件**：{r['vote']['trigger_conditions']}\n"
-    f"- **终投陈词**：{r['vote']['final_statement']}\n\n"
-    for r in round2_records
-)
+md_decision = f"""# 04 首席投资总监最终决策单（{RUN_ID}）
 
-md_meeting = f"""# 03 投资决策委员会投票会议纪要（{RUN_ID}）
+> **{pm_decision['headline']}**
 
-- **会议日期**：{TODAY_STR}
-- **最终裁定动作**：`{tally['final_action']}` — {tally['final_action_label']}
-- **终投分布**：`{json.dumps(tally['vote_counts'], ensure_ascii=False)}`
-- **委员会平均信心**：{tally['avg_confidence']} / 10
-- **逆向风控预警触发**：`{tally['risk_veto_triggered']}`
-- **计票规则裁定说明**：{tally['resolution_rule']}
+## 一、通用市场与 3 颗子弹算法结论（对应邮件对外版，已脱敏）
+- **今日参考国内金价**：{cny_price if cny_price is not None else '待核实'} RMB/克
+- **今日综合入场性价比分**：**{quant['composite_score']} / 100**（{quant['score_zone_label']}）
+- **通用算法拍板**：`{pm_decision['universal_action']}` — {pm_decision['recommended_amount_short']}
+- **一句话看懂今天**：{pm_decision['plain_takeaway']}
+- **🛡️ 稳健做法**：{pm_decision['steady_option_plain']}
+- **🔥 大胆做法**：{pm_decision['bold_option_plain']}
+
+{pm_decision['public_decision_markdown']}
 
 ---
 
-## 第一轮：独立盲评与初投
-{r1_blocks}
----
+## 二、仅限本地查看 · 个人账户与当月子弹备忘（绝不发进邮件）
+- **当前持仓**：本金 {ps['principal_cny']} RMB / 均价 {ps['average_cost_cny_per_gram']} RMB/克 / 浮亏盈 {pnl_str}
+- **本月子弹进度（{ps['month']}）**：已用 **{ps['shots_used']} / {quant['max_shots_per_month']} 颗**，剩余 **{ps['remaining_shots']} 颗**（下次为第 {ps['next_shot_number']} 颗，门槛 **{ps['active_threshold']} 分**；次月 1 日自动刷新为 0/3 颗）
+- **个人精准拍板**：`{pm_decision['personal_action']}` — {ps['personal_reason']}
 
-## 第二轮：交叉质询、辩论与最终表决
-{r2_blocks}
+{pm_decision['personal_private_note_markdown']}
 """
 
-md_decision = f"""# 04 最终投资决策单（{RUN_ID}）
-
-> **{decision['headline']}**
-
-| 决议维度 | 内容 |
-| --- | --- |
-| 最终动作 | `{tally['final_action']}`（{tally['final_action_label']}） |
-| 建议金额 / 比例 | {decision['recommended_amount_summary']} |
-| 当前参考国内金价 | {cny_price if cny_price is not None else '待核实'} RMB/克 |
-| 当前持仓状态 | 本金 {portfolio_metrics['principal_cny']} RMB / 均价 {portfolio_metrics['average_cost_cny_per_gram']} RMB/克 / 浮亏盈 {pnl_str} |
-| 本月剩余预算 | {portfolio_metrics['remaining_budget_this_month_cny']} RMB（单笔起投 {portfolio_metrics['min_single_buy_cny']} RMB） |
-| 终投分布 | {json.dumps(tally['vote_counts'], ensure_ascii=False)}（平均信心 {tally['avg_confidence']}/10） |
-| 短线计划（1–4周） | {decision['short_term_plan']} |
-| 长线计划（3–12月） | {decision['long_term_plan']} |
-| 逢低加仓触发位 | {decision['dip_buy_triggers']} |
-| 逢高止盈触发位 | {decision['take_profit_triggers']} |
-
-## 核心风险提示
-""" + "\n".join(f"- {r}" for r in decision["top_risks"]) + f"""
-
----
-
-{decision['decision_markdown']}
-"""
-
-committee_rows = [
-    (item["member"], item["action"], item["confidence"], item["logic"])
-    for item in decision["committee_one_liners"]
-]
-risk_bullets = [(item["tag"], item["desc"]) for item in decision["risk_items"]]
-action_steps = [(item["label"], item["text"]) for item in decision["action_steps"]]
+xau_short = intel["market"]["xau_usd_price"].split("（")[0].split("(")[0].strip()[:28]
 price_radar = [
-    ("逢低加仓区", decision["radar_dip_buy"]["price_range"], decision["radar_dip_buy"]["note"], "#16a34a"),
-    ("破位防守线", decision["radar_defense"]["price_range"], decision["radar_defense"]["note"], "#dc2626"),
-    ("短线止盈区", decision["radar_short_tp"]["price_range"], decision["radar_short_tp"]["note"], "#d97706"),
-    ("长线止盈区", decision["radar_long_tp"]["price_range"], decision["radar_long_tp"]["note"], "#0284c7"),
+    ("跌到这儿考虑买", pm_decision["radar_dip_buy"]["price_range"], pm_decision["radar_dip_buy"]["note"], "#16a34a"),
+    ("跌破这儿先停买", pm_decision["radar_defense"]["price_range"], pm_decision["radar_defense"]["note"], "#dc2626"),
+    ("短线涨到这儿卖", pm_decision["radar_short_tp"]["price_range"], pm_decision["radar_short_tp"]["note"], "#d97706"),
+    ("长线涨到这儿卖", pm_decision["radar_long_tp"]["price_range"], pm_decision["radar_long_tp"]["note"], "#0284c7"),
 ]
-xau_short = intel["market"]["xau_usd_price"].split("（")[0].split("(")[0].strip()[:26]
+spec_rows = [(s["role"], s["score_badge"], s["signal"]) for s in pm_decision["specialist_email_lines"]]
+risk_bullets = [(r["tag"], r["desc"]) for r in pm_decision["risk_items"]]
 
-email_subject = f"【黄金晨报 {TODAY_STR}】{tally['final_action']} · {decision['recommended_amount_short']} | 国内 {cny_price or 'N/A'} 元/克"
-email_html = render_email_html(
+email_subject = (
+    f"【黄金晨报 {TODAY_STR}】买点分 {quant['composite_score']}/100 · "
+    f"{pm_decision['recommended_amount_short']} | 国内 {cny_price or 'N/A'} 元/克"
+)
+email_html = render_v3_email_html(
     date_str=TODAY_STR,
-    headline=decision["headline"],
-    action=tally["final_action"],
-    recommended_amount_short=decision["recommended_amount_short"],
-    consensus_text=f"{tally['resolution_rule']} · 平均信心 {tally['avg_confidence']}/10" + (" · 红队风控预警" if tally["risk_veto_triggered"] else ""),
+    headline=pm_decision["headline"],
+    plain_takeaway=pm_decision["plain_takeaway"],
+    action=pm_decision["universal_action"],
+    recommended_amount_short=pm_decision["recommended_amount_short"],
+    composite_score=quant["composite_score"],
+    score_zone_label=quant["score_zone_label"],
     cny_price=cny_price,
     xau_usd_short=xau_short,
-    monthly_budget_cny=portfolio_metrics["monthly_budget_cny"],
-    min_single_buy_cny=portfolio_metrics["min_single_buy_cny"],
+    kline_thermometer_text=pm_decision["kline_thermometer_plain"],
+    shot_amount_cny=quant["shot_amount_cny"],
+    max_shots_per_month=quant["max_shots_per_month"],
+    bullet_ladder=quant["bullet_ladder"],
     outlook_bullets=[
-        ("宏观驱动", decision["macro_one_liner"]),
-        ("短线 1–4周", decision["short_term_one_liner"]),
-        ("长线 3–12月", decision["long_term_one_liner"]),
+        ("为啥这么走", pm_decision["macro_one_liner"]),
+        ("近几周怎么看", pm_decision["short_term_one_liner"]),
+        ("放长半年看", pm_decision["long_term_one_liner"]),
     ],
     price_radar=price_radar,
-    action_steps=action_steps,
-    committee_table_rows=committee_rows,
+    steady_option=pm_decision["steady_option_plain"],
+    bold_option=pm_decision["bold_option_plain"],
+    specialist_rows=spec_rows,
     risk_bullets=risk_bullets,
 )
 
 raw_payload = {
+    "version": "v3_quant_5specialist_1pm",
     "run_id": RUN_ID,
     "date": TODAY_STR,
-    "portfolio": PORTFOLIO,
-    "portfolio_metrics": portfolio_metrics,
+    "kline_data": kline_data,
     "intel": intel,
-    "analysis": analysis,
-    "round1_votes": round1_records,
-    "round2_votes": round2_records,
-    "tally": tally,
-    "decision": decision,
+    "specialists": specialists,
+    "quant": quant,
+    "pm_decision": pm_decision,
 }
 
-vote_compact = ", ".join(f"{k}:{v}" for k, v in tally["vote_counts"].items())
-short_amt = decision["recommended_amount_summary"].replace("\n", " ")[:80]
 ledger_row = (
-    f"| {RUN_ID} | {cny_price if cny_price is not None else 'N/A'} | {pnl_str} | "
-    f"`{tally['final_action']}` | {short_amt} | {vote_compact} | [查看档案](runs/{RUN_ID}/04_decision.md) |\n"
+    f"| {RUN_ID} (v3) | {cny_price if cny_price is not None else 'N/A'} | {pnl_str} | "
+    f"`{pm_decision['personal_action']}` (市场分 {quant['composite_score']}/100) | "
+    f"{pm_decision['recommended_amount_short']} | 5专家+PM | [查看档案](runs/{RUN_ID}/04_decision.md) |\n"
 )
 
 
 def write_archive(target_run_dir: Path, update_ledger_path: Path | None, dispatch_path: Path | None):
     target_run_dir.mkdir(parents=True, exist_ok=True)
     (target_run_dir / "01_intel.md").write_text(md_intel, encoding="utf-8")
-    (target_run_dir / "02_analysis.md").write_text(md_analysis, encoding="utf-8")
-    (target_run_dir / "03_meeting.md").write_text(md_meeting, encoding="utf-8")
+    (target_run_dir / "02_specialists.md").write_text(md_specialists, encoding="utf-8")
     (target_run_dir / "04_decision.md").write_text(md_decision, encoding="utf-8")
     (target_run_dir / "email.html").write_text(email_html, encoding="utf-8")
     (target_run_dir / "raw_result.json").write_text(
@@ -1214,7 +1345,7 @@ def write_archive(target_run_dir: Path, update_ledger_path: Path | None, dispatc
         if not update_ledger_path.exists():
             update_ledger_path.write_text(
                 "# 黄金投资决策历史总台账（Decision Ledger）\n\n"
-                "| 日期时间 | 参考国内金价 (RMB/克) | 持仓浮动盈亏 | 最终决议动作 | 建议金额 / 比例 | 投票分布 (终投) | 会议档案链接 |\n"
+                "| 日期时间 | 参考国内金价 (RMB/克) | 持仓浮动盈亏 | 最终决议动作 | 建议金额 / 比例 | 模式 | 会议档案链接 |\n"
                 "| --- | --- | --- | --- | --- | --- | --- |\n",
                 encoding="utf-8",
             )
@@ -1225,7 +1356,7 @@ def write_archive(target_run_dir: Path, update_ledger_path: Path | None, dispatc
             "date": TODAY_STR,
             "run_id": RUN_ID,
             "computed_at_cst": datetime.now(SHANGHAI_TZ).isoformat(),
-            "mode": "local_full",
+            "mode": "local_v3_quant",
             "subject": email_subject,
             "recipient": "3518109978@qq.com",
             "html_path": str(target_run_dir / "email.html"),
@@ -1239,7 +1370,7 @@ saved_mode = "primary"
 saved_dir = BASE_DIR / "records" / "runs" / RUN_ID
 try:
     write_archive(saved_dir, BASE_DIR / "records" / "ledger.md", BASE_DIR / "records" / "latest_dispatch.json")
-    log(f"档案与 HTML 邮件已写入: {saved_dir}")
+    log(f"v3 档案与 HTML 邮件已写入: {saved_dir}")
 except PermissionError:
     saved_mode = "fallback"
     saved_dir = FALLBACK_ROOT / RUN_ID
@@ -1252,13 +1383,17 @@ print(
             "run_id": RUN_ID,
             "saved_mode": saved_mode,
             "saved_dir": str(saved_dir),
+            "kline_available": kline_data["available"],
+            "cny_gold_price_per_gram": cny_price,
+            "composite_score": quant["composite_score"],
+            "score_zone_label": quant["score_zone_label"],
+            "score_breakdown": quant["score_breakdown"],
+            "universal_action": pm_decision["universal_action"],
+            "personal_action": pm_decision["personal_action"],
+            "personal_shots_remaining": ps["remaining_shots"],
             "email_subject": email_subject,
             "email_html_path": str(saved_dir / "email.html"),
             "decision_md_path": str(saved_dir / "04_decision.md"),
-            "cny_gold_price_per_gram": cny_price,
-            "tally": tally,
-            "decision_headline": decision["headline"],
-            "recommended_amount_summary": decision["recommended_amount_summary"],
         },
         ensure_ascii=False,
         indent=2,
